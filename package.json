@@ -1,0 +1,27 @@
+{
+  "name": "ainews-api",
+  "version": "1.0.0",
+  "description": "Stock analysis API using Claude AI and Finnhub news",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "stock",
+    "analysis",
+    "claude",
+    "finnhub",
+    "news"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  }
+}
+
