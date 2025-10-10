@@ -50,6 +50,25 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
   - Reports: IV_put - IV_call in percentage points
   - Format: e.g., "5.4 pp"
 
+- **ATM IV** (At-the-Money Implied Volatility):
+  - Finds strike nearest to spot price
+  - Averages call + put IV at ATM strike (uses either if one missing)
+  - Reports: Percentage with strike level
+  - Format: e.g., "34.6%@485"
+
+- **Put/Call Volume Ratio**:
+  - Sums put and call volumes for nearest expiry
+  - PCR = total_put_volume / total_call_volume
+  - Sentiment indicator: >1 = more put volume (bearish), <1 = more call volume (bullish)
+  - Format: e.g., "1.23"
+
+- **Implied Move** (ATM Straddle):
+  - Calculates ATM call mid + ATM put mid
+  - Uses bid/ask mid if available, falls back to lastPrice
+  - Expresses as $ amount and % of spot
+  - Represents market's expected move by expiry
+  - Format: e.g., "$12.80 (2.7%)"
+
 ### ✅ News Evidence Formatting
 - **Cleans raw news string**: Strips line breaks, weird punctuation, empty lines
 - **Formats as bullets**: Transforms into clean evidence points
@@ -380,7 +399,7 @@ This service includes a **local Python helper** for options analytics using `yfi
 ```json
 {
   "success": true,
-  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp.\n\nBULLISH: Strong demand momentum...\n\nBEARISH: Valuation concerns...\n\nNEUTRAL: Wait for confirmation...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (yfinance local @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
+  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp; ATM IV: 34.6%@485; Put/Call Vol Ratio: 1.23; Implied Move: $12.80 (2.7%).\n\nBULLISH: Strong demand momentum...\n\nBEARISH: Valuation concerns...\n\nNEUTRAL: Wait for confirmation...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (yfinance local @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
 }
 ```
 
