@@ -156,8 +156,14 @@ const fetchOptionsChain = async (symbol) => {
       return cached.data;
     }
 
-    const url = `https://query2.finance.yahoo.com/v7/finance/options/${symbol}`;
-    const response = await fetch(url);
+    // Step 1: Fetch available expiration dates with proper headers
+    const baseUrl = `https://query2.finance.yahoo.com/v7/finance/options/${symbol}`;
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    };
+
+    const response = await fetch(baseUrl, { headers });
 
     if (!response.ok) {
       log(`⚠️  Yahoo options API error for ${symbol}: HTTP ${response.status}`);
@@ -172,19 +178,67 @@ const fetchOptionsChain = async (symbol) => {
     }
 
     const result = data.optionChain.result[0];
-    const options = result.options?.[0];
-    
-    if (!options) {
-      log(`⚠️  No options contract data for ${symbol}`);
+    const expirationDates = result.expirationDates || [];
+    const quote = result.quote;
+
+    if (expirationDates.length === 0) {
+      log(`⚠️  No expiration dates for ${symbol}`);
+      return { optionsUnavailable: true };
+    }
+
+    // Step 2: Filter expirations within 30 days
+    const now = Date.now() / 1000;
+    const thirtyDaysFromNow = now + (30 * 24 * 60 * 60);
+    const nearExpirations = expirationDates.filter(exp => exp <= thirtyDaysFromNow);
+
+    if (nearExpirations.length === 0) {
+      log(`⚠️  No options expiring within 30 days for ${symbol}`);
+      return { optionsUnavailable: true };
+    }
+
+    // Step 3: Fetch options for the nearest 2-3 expirations
+    const expirationsToFetch = nearExpirations.slice(0, 3);
+    let allCalls = [];
+    let allPuts = [];
+
+    for (const expDate of expirationsToFetch) {
+      const expUrl = `${baseUrl}?date=${expDate}`;
+      const expResponse = await fetch(expUrl, { headers });
+      
+      if (expResponse.ok) {
+        const expData = await expResponse.json();
+        const expOptions = expData.optionChain?.result?.[0]?.options?.[0];
+        
+        if (expOptions) {
+          // Filter out bad rows: null/0 IV or OI
+          const validCalls = (expOptions.calls || []).filter(opt => 
+            opt.impliedVolatility > 0 && opt.openInterest > 0 && opt.strike > 0
+          );
+          const validPuts = (expOptions.puts || []).filter(opt => 
+            opt.impliedVolatility > 0 && opt.openInterest > 0 && opt.strike > 0
+          );
+          
+          allCalls = allCalls.concat(validCalls);
+          allPuts = allPuts.concat(validPuts);
+        }
+      }
+      
+      // Small delay to avoid throttling
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // Step 4: Validate we have enough data
+    if (allCalls.length < 5 || allPuts.length < 5) {
+      log(`⚠️  Insufficient valid options data for ${symbol} (calls: ${allCalls.length}, puts: ${allPuts.length})`);
       return { optionsUnavailable: true };
     }
 
     const parsedData = {
       optionsUnavailable: false,
-      calls: options.calls || [],
-      puts: options.puts || [],
-      expirationDate: options.expirationDate,
-      quote: result.quote
+      calls: allCalls,
+      puts: allPuts,
+      expirationDates: expirationsToFetch,
+      quote: quote
     };
 
     // Cache the result
@@ -193,7 +247,7 @@ const fetchOptionsChain = async (symbol) => {
       timestamp: Date.now()
     });
 
-    log(`✅ Fetched options for ${symbol}: ${parsedData.calls.length} calls, ${parsedData.puts.length} puts`);
+    log(`✅ Fetched options for ${symbol}: ${allCalls.length} valid calls, ${allPuts.length} valid puts across ${expirationsToFetch.length} expirations`);
     return parsedData;
 
   } catch (error) {
@@ -225,36 +279,48 @@ const calculateDealerGamma = (optionsData, spotPrice) => {
   let totalGamma = 0;
   const strikeContributions = [];
 
-  // Process all options (calls and puts)
-  const allOptions = [...optionsData.calls, ...optionsData.puts];
-
-  for (const option of allOptions) {
-    const expiration = option.expiration || optionsData.expirationDate;
+  // Process calls
+  for (const option of optionsData.calls) {
+    const expiration = option.expiration;
     
-    // Only consider options expiring within 30 days
-    if (expiration > thirtyDaysFromNow) continue;
+    if (!expiration || expiration > thirtyDaysFromNow) continue;
 
-    const T = (expiration - now) / (365.25 * 24 * 60 * 60); // Time to expiration in years
+    const T = (expiration - now) / (365.25 * 24 * 60 * 60);
     const K = option.strike;
-    const IV = option.impliedVolatility || 0;
-    const OI = option.openInterest || 0;
+    const IV = option.impliedVolatility;
+    const OI = option.openInterest;
 
     if (IV <= 0 || OI <= 0 || T <= 0) continue;
 
-    // Calculate gamma
     const gamma = calculateGamma(spotPrice, K, T, IV);
-    
-    // Dollar gamma: Γ × S² × 100 × OI
     const dollarGamma = gamma * spotPrice * spotPrice * 100 * OI;
     
     totalGamma += dollarGamma;
+    strikeContributions.push({ strike: K, gamma: dollarGamma, type: 'call' });
+  }
+
+  // Process puts
+  for (const option of optionsData.puts) {
+    const expiration = option.expiration;
     
-    // Track top contributors
-    strikeContributions.push({
-      strike: K,
-      gamma: dollarGamma,
-      type: option.contractSymbol?.includes('C') ? 'call' : 'put'
-    });
+    if (!expiration || expiration > thirtyDaysFromNow) continue;
+
+    const T = (expiration - now) / (365.25 * 24 * 60 * 60);
+    const K = option.strike;
+    const IV = option.impliedVolatility;
+    const OI = option.openInterest;
+
+    if (IV <= 0 || OI <= 0 || T <= 0) continue;
+
+    const gamma = calculateGamma(spotPrice, K, T, IV);
+    const dollarGamma = gamma * spotPrice * spotPrice * 100 * OI;
+    
+    totalGamma += dollarGamma;
+    strikeContributions.push({ strike: K, gamma: dollarGamma, type: 'put' });
+  }
+
+  if (strikeContributions.length === 0) {
+    return { unavailable: true };
   }
 
   // Dealer convention: negative of the sum (dealers are short gamma)
@@ -262,7 +328,6 @@ const calculateDealerGamma = (optionsData, spotPrice) => {
   const gammaInBillions = dealerGamma / 1e9;
   const sign = dealerGamma < 0 ? 'short' : 'long';
 
-  // Get top 3 contributors
   const topStrikes = strikeContributions
     .sort((a, b) => Math.abs(b.gamma) - Math.abs(a.gamma))
     .slice(0, 3);
@@ -483,23 +548,51 @@ app.post('/analyze', async (req, res) => {
     const evidence = formatNewsEvidence(newsText);
     log(`📋 /analyze - Formatted ${evidence.length} evidence points`);
 
+    // Track data source timestamps
+    const dataSources = [];
+
     // Task 2: Fetch live price data from Alpaca if symbol found
     let priceData = null;
     let spotPrice = null;
     if (symbol) {
+      const priceTimestamp = new Date();
       priceData = await fetchAlpacaPrice(symbol);
       spotPrice = priceData?.currentPrice;
+      if (priceData) {
+        dataSources.push({
+          source: 'Alpaca',
+          type: 'price',
+          timestamp: priceTimestamp
+        });
+      }
     }
 
     // Task 3: Fetch options chain if symbol found
     let optionsData = { optionsUnavailable: true };
     if (symbol) {
+      const optionsTimestamp = new Date();
       optionsData = await fetchOptionsChain(symbol);
+      if (!optionsData.optionsUnavailable) {
+        dataSources.push({
+          source: 'Yahoo Finance',
+          type: 'options',
+          timestamp: optionsTimestamp
+        });
+      }
       // Use Yahoo quote price if Alpaca failed
       if (!spotPrice && optionsData.quote?.regularMarketPrice) {
         spotPrice = optionsData.quote.regularMarketPrice;
         log(`💰 Using Yahoo price for ${symbol}: $${spotPrice}`);
       }
+    }
+
+    // Track news source timestamp (news was provided by client)
+    if (newsText && newsText.trim().length > 0) {
+      dataSources.push({
+        source: 'Finnhub',
+        type: 'news',
+        timestamp: new Date()
+      });
     }
 
     // Task 4: Calculate quant metrics if options available
@@ -613,9 +706,26 @@ Now provide your analysis:`;
       const data = await response.json();
       log('✅ /analyze - Analysis completed successfully');
 
+      // Format data sources footer
+      let analysis = data.content[0].text;
+      
+      if (dataSources.length > 0) {
+        const formatTime = (date) => {
+          const hours = date.getUTCHours().toString().padStart(2, '0');
+          const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+          return `${hours}:${minutes} UTC`;
+        };
+
+        const sourceLines = dataSources.map(ds => 
+          `• ${ds.source} (${ds.type} @ ${formatTime(ds.timestamp)})`
+        );
+
+        analysis += `\n\n—\nData sources:\n${sourceLines.join('\n')}`;
+      }
+
       res.json({
         success: true,
-        analysis: data.content[0].text,
+        analysis: analysis,
         usage: {
           input_tokens: data.usage.input_tokens,
           output_tokens: data.usage.output_tokens
