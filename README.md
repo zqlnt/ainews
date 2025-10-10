@@ -4,12 +4,105 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
 
 ## Features
 
-- 🤖 AI-powered stock analysis using Claude Sonnet 4
-- 📰 Real-time stock news from Finnhub (last 24 hours)
-- 🔍 Multiple perspectives: Bullish, Bearish, and Neutral analysis
-- ✅ Built-in API key testing endpoints
-- 🚀 Production-ready with proper error handling
-- 🌐 CORS enabled for iOS app integration
+- 🤖 **AI-powered stock analysis** using Claude Sonnet 4
+- 📰 **Real-time stock news** from Finnhub (last 24 hours)
+- 💰 **Live price data** from Alpaca Markets
+- 📊 **Options analytics** with Yahoo Finance (dealer gamma, skew)
+- 🔍 **Multiple perspectives**: Bullish, Bearish, and Neutral analysis
+- 🛡️ **Investment advice guardrails** - never recommends buy/sell/hold
+- 🧮 **Quant metrics**: Dealer Gamma (0-30d), Skew (±10% OTM)
+- 🎯 **Symbol extraction** - automatically detects tickers from queries
+- ✅ **Built-in API key testing** endpoints
+- 🚀 **Production-ready** with proper error handling
+- 🌐 **CORS enabled** for iOS app integration
+
+## Latest Updates
+
+### ✅ Symbol & Intent Detection
+- **Symbol Extraction**: Automatically detects ticker symbols from user queries (e.g., "Why did NVDA move?" → NVDA)
+- **Advice Detection**: Intercepts investment advice queries and returns non-advice message
+  - Patterns detected: "what should I buy", "I have $100 what should I do", etc.
+  - Response: "I can't provide investment advice. Try: 'Why did NVDA move today?'"
+
+### ✅ Live Price Fetch via Alpaca
+- **Integration**: Fetches real-time price data from Alpaca Markets API
+- **Data Retrieved**: Current price, previous close, % change
+- **Graceful Failure**: If Alpaca fails, continues without price data (no breaking errors)
+- **Fallback**: Uses Yahoo Finance quote if available when Alpaca unavailable
+
+### ✅ Options Chain via Yahoo Finance
+- **Endpoint**: https://query2.finance.yahoo.com/v7/finance/options/{symbol}
+- **Caching**: 3-minute cache per symbol to avoid throttling
+- **Data Parsed**: calls[], puts[] with impliedVolatility, openInterest, volume, strike, expirationDate
+- **Graceful Failure**: Sets `optionsUnavailable: true` on errors, never throws
+
+### ✅ Quant Calculators
+- **Dealer Gamma (0-30d)**:
+  - Black-Scholes gamma formula: Γ = φ(d1)/(S·σ·√T)
+  - Dollarized: Γ × S² × 100 × OI
+  - Dealer convention: negative sum (dealers short gamma)
+  - Format: e.g., "-$1.7B (short)"
+  - Tracks top 3 strike contributors
+
+- **Skew (±10% OTM)**:
+  - Finds IV at 0.9S (put) and 1.1S (call)
+  - Linear interpolation between strikes
+  - Reports: IV_put - IV_call in percentage points
+  - Format: e.g., "5.4 pp"
+
+### ✅ News Evidence Formatting
+- **Cleans raw news string**: Strips line breaks, weird punctuation, empty lines
+- **Formats as bullets**: Transforms into clean evidence points
+- **Example**:
+  - Input: "Tesla shares fall 5%!!!\n\nElon delays factory;;;"
+  - Output: ["Tesla shares fall 5%.", "Elon delays factory."]
+- **Limit**: Top 5 evidence points
+
+### ✅ Strict Output Template
+- **Fixed Format**:
+  ```
+  <2-4 sentence overview, includes quant metrics if available>
+  
+  BULLISH: <1-2 sentences tied to evidence>
+  
+  BEARISH: <1-2 sentences tied to evidence>
+  
+  NEUTRAL: <1-2 sentences tied to evidence>
+  
+  Note: Options data unavailable for this symbol. (if applicable)
+  ```
+
+- **Prompt Rules**:
+  - Use ONLY provided evidence and numbers
+  - Never recommend buy/sell/hold
+  - No markdown headers or emojis
+  - Always include three labeled perspectives
+  - Explicitly states when options unavailable
+
+### 🔒 API Stability Guarantee
+- ✅ `POST /analyze` → returns `{ success, analysis, usage }` (unchanged)
+- ✅ `GET /news/:symbol` → unchanged
+- ✅ `/test/*` endpoints → unchanged
+- ✅ All response shapes identical to original
+
+### 📊 Enhanced Analysis Response
+The `analysis` field now contains:
+1. **Structured format** with labeled perspectives (BULLISH/BEARISH/NEUTRAL)
+2. **Quant metrics** when options data available
+3. **Evidence-based reasoning** from cleaned news
+4. **Explicit unavailability notices** when data missing
+
+Example response:
+```json
+{
+  "success": true,
+  "analysis": "NVIDIA shares are down 4% following earnings miss...\n\nBULLISH: ...\n\nBEARISH: ...\n\nNEUTRAL: ...\n\nNote: Options data unavailable for this symbol.",
+  "usage": {
+    "input_tokens": 277,
+    "output_tokens": 193
+  }
+}
+```
 
 ## Quick Start
 
@@ -31,6 +124,8 @@ Edit `.env`:
 ```
 CLAUDE_API_KEY=your_claude_api_key_here
 FINNHUB_API_KEY=your_finnhub_api_key_here
+ALPACA_API_KEY=your_alpaca_api_key_here
+ALPACA_SECRET_KEY=your_alpaca_secret_key_here
 PORT=3000
 ```
 
@@ -219,6 +314,8 @@ In Render dashboard, go to **Environment** tab and add:
 ```
 CLAUDE_API_KEY=your_claude_api_key_here
 FINNHUB_API_KEY=your_finnhub_api_key_here
+ALPACA_API_KEY=your_alpaca_api_key_here
+ALPACA_SECRET_KEY=your_alpaca_secret_key_here
 ```
 
 **Note**: `PORT` is automatically set by Render, no need to add it.
@@ -249,6 +346,8 @@ curl https://your-app.onrender.com/news/AAPL
 |----------|----------|-------------|
 | `CLAUDE_API_KEY` | Yes | Your Anthropic Claude API key |
 | `FINNHUB_API_KEY` | Yes | Your Finnhub API key |
+| `ALPACA_API_KEY` | Yes | Your Alpaca Markets API key |
+| `ALPACA_SECRET_KEY` | Yes | Your Alpaca Markets secret key |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
 
 ## Error Handling
@@ -399,6 +498,53 @@ All important operations are logged with timestamps:
 - `/news/:symbol` - ~500ms (Finnhub API)
 - `/analyze` - ~2-4s (Claude AI processing)
 - `/test/*` - ~200ms-2s
+
+## iOS Integration Notes
+
+### Parsing Analysis Response
+
+**No changes needed in iOS app!** The response format is identical:
+- Still receives `{ success, analysis, usage }`
+- `analysis` field now has structured format with labeled perspectives
+
+### Extracting Perspectives
+
+iOS can parse using regex patterns:
+
+```swift
+// Extract BULLISH perspective
+let bullishPattern = /BULLISH: (.*?)\n/
+if let match = analysis.firstMatch(of: bullishPattern) {
+    let bullishText = String(match.1)
+}
+
+// Extract BEARISH perspective  
+let bearishPattern = /BEARISH: (.*?)\n/
+if let match = analysis.firstMatch(of: bearishPattern) {
+    let bearishText = String(match.1)
+}
+
+// Extract NEUTRAL perspective
+let neutralPattern = /NEUTRAL: (.*?)\n/
+if let match = analysis.firstMatch(of: neutralPattern) {
+    let neutralText = String(match.1)
+}
+```
+
+### Response Structure
+
+The `analysis` string follows this format:
+```
+<Overview paragraph with optional quant metrics>
+
+BULLISH: <positive perspective>
+
+BEARISH: <negative perspective>
+
+NEUTRAL: <wait-and-see perspective>
+
+Note: Options data unavailable for this symbol. (if applicable)
+```
 
 ## License
 

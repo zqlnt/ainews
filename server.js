@@ -16,6 +16,9 @@ app.use(express.json()); // Parse JSON request bodies
 // API Keys from environment variables
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
+const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
+const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
+const ALPACA_BASE_URL = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
 
 // Utility function to log with timestamp
 const log = (message) => {
@@ -37,6 +40,316 @@ const getDateRange = () => {
     from: formatDate(yesterday),
     to: formatDate(today)
   };
+};
+
+// Extract ticker symbol from user query
+const extractSymbol = (query) => {
+  // Common stock ticker patterns (2-5 uppercase letters)
+  const symbolPattern = /\b([A-Z]{2,5})\b/g;
+  const matches = query.match(symbolPattern);
+  
+  if (!matches) return null;
+  
+  // Filter out common words that aren't tickers
+  const excludeWords = ['CEO', 'CFO', 'IPO', 'ETF', 'AI', 'IT', 'US', 'UK', 'USD', 'API', 'FAQ'];
+  const validSymbols = matches.filter(word => !excludeWords.includes(word));
+  
+  // Return first valid symbol found
+  return validSymbols.length > 0 ? validSymbols[0] : null;
+};
+
+// Detect if query is asking for investment advice
+const isAdviceSeekingQuery = (query) => {
+  const lowerQuery = query.toLowerCase();
+  
+  const advicePatterns = [
+    /what should i (buy|sell|invest|do)/i,
+    /should i (buy|sell|invest)/i,
+    /i have \$?\d+.*what/i,
+    /recommend.*stock/i,
+    /which stock.*buy/i,
+    /tell me what to/i,
+    /give me.*advice/i,
+    /best stock to/i
+  ];
+  
+  return advicePatterns.some(pattern => pattern.test(lowerQuery));
+};
+
+// Fetch live price data from Alpaca
+const fetchAlpacaPrice = async (symbol) => {
+  try {
+    if (!ALPACA_API_KEY || !ALPACA_SECRET_KEY) {
+      log(`⚠️  Alpaca keys not configured, skipping price fetch`);
+      return null;
+    }
+
+    // Use data endpoint for market data (not trading endpoint)
+    const url = `https://data.alpaca.markets/v2/stocks/${symbol}/quotes/latest`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'APCA-API-KEY-ID': ALPACA_API_KEY,
+        'APCA-API-SECRET-KEY': ALPACA_SECRET_KEY
+      }
+    });
+
+    if (!response.ok) {
+      log(`⚠️  Alpaca API error for ${symbol}: HTTP ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    
+    if (data.quote) {
+      const currentPrice = data.quote.ap || data.quote.bp; // ask price or bid price
+      
+      // Get previous close from bars endpoint
+      const barsUrl = `https://data.alpaca.markets/v2/stocks/${symbol}/bars?timeframe=1Day&limit=2`;
+      const barsResponse = await fetch(barsUrl, {
+        headers: {
+          'APCA-API-KEY-ID': ALPACA_API_KEY,
+          'APCA-API-SECRET-KEY': ALPACA_SECRET_KEY
+        }
+      });
+      
+      let prevClose = currentPrice;
+      if (barsResponse.ok) {
+        const barsData = await barsResponse.json();
+        if (barsData.bars && barsData.bars.length > 0) {
+          prevClose = barsData.bars[0].c; // Previous day's close
+        }
+      }
+      
+      const change = currentPrice - prevClose;
+      const changePercent = ((change / prevClose) * 100).toFixed(2);
+      
+      log(`💰 Alpaca price for ${symbol}: $${currentPrice} (${changePercent > 0 ? '+' : ''}${changePercent}%)`);
+      
+      return {
+        symbol,
+        currentPrice,
+        prevClose,
+        change,
+        changePercent
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    log(`⚠️  Alpaca fetch error for ${symbol}: ${error.message}`);
+    return null; // Fail gracefully
+  }
+};
+
+// Task 3: Options cache (1-5 min TTL per symbol)
+const optionsCache = new Map();
+const OPTIONS_CACHE_TTL = 3 * 60 * 1000; // 3 minutes
+
+// Task 3: Fetch options chain from Yahoo Finance
+const fetchOptionsChain = async (symbol) => {
+  try {
+    // Check cache first
+    const cached = optionsCache.get(symbol);
+    if (cached && Date.now() - cached.timestamp < OPTIONS_CACHE_TTL) {
+      log(`📊 Using cached options for ${symbol}`);
+      return cached.data;
+    }
+
+    const url = `https://query2.finance.yahoo.com/v7/finance/options/${symbol}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      log(`⚠️  Yahoo options API error for ${symbol}: HTTP ${response.status}`);
+      return { optionsUnavailable: true };
+    }
+
+    const data = await response.json();
+    
+    if (!data.optionChain || !data.optionChain.result || data.optionChain.result.length === 0) {
+      log(`⚠️  No options data for ${symbol}`);
+      return { optionsUnavailable: true };
+    }
+
+    const result = data.optionChain.result[0];
+    const options = result.options?.[0];
+    
+    if (!options) {
+      log(`⚠️  No options contract data for ${symbol}`);
+      return { optionsUnavailable: true };
+    }
+
+    const parsedData = {
+      optionsUnavailable: false,
+      calls: options.calls || [],
+      puts: options.puts || [],
+      expirationDate: options.expirationDate,
+      quote: result.quote
+    };
+
+    // Cache the result
+    optionsCache.set(symbol, {
+      data: parsedData,
+      timestamp: Date.now()
+    });
+
+    log(`✅ Fetched options for ${symbol}: ${parsedData.calls.length} calls, ${parsedData.puts.length} puts`);
+    return parsedData;
+
+  } catch (error) {
+    log(`⚠️  Options fetch error for ${symbol}: ${error.message}`);
+    return { optionsUnavailable: true };
+  }
+};
+
+// Task 4: Black-Scholes helper functions
+const normalPDF = (x) => {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+};
+
+const calculateGamma = (S, K, T, sigma) => {
+  if (T <= 0 || sigma <= 0) return 0;
+  const d1 = (Math.log(S / K) + (0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+  return normalPDF(d1) / (S * sigma * Math.sqrt(T));
+};
+
+// Task 4: Calculate Dealer Gamma (0-30d)
+const calculateDealerGamma = (optionsData, spotPrice) => {
+  if (optionsData.optionsUnavailable || !spotPrice) {
+    return { unavailable: true };
+  }
+
+  const now = Date.now() / 1000; // Unix timestamp in seconds
+  const thirtyDaysFromNow = now + (30 * 24 * 60 * 60);
+
+  let totalGamma = 0;
+  const strikeContributions = [];
+
+  // Process all options (calls and puts)
+  const allOptions = [...optionsData.calls, ...optionsData.puts];
+
+  for (const option of allOptions) {
+    const expiration = option.expiration || optionsData.expirationDate;
+    
+    // Only consider options expiring within 30 days
+    if (expiration > thirtyDaysFromNow) continue;
+
+    const T = (expiration - now) / (365.25 * 24 * 60 * 60); // Time to expiration in years
+    const K = option.strike;
+    const IV = option.impliedVolatility || 0;
+    const OI = option.openInterest || 0;
+
+    if (IV <= 0 || OI <= 0 || T <= 0) continue;
+
+    // Calculate gamma
+    const gamma = calculateGamma(spotPrice, K, T, IV);
+    
+    // Dollar gamma: Γ × S² × 100 × OI
+    const dollarGamma = gamma * spotPrice * spotPrice * 100 * OI;
+    
+    totalGamma += dollarGamma;
+    
+    // Track top contributors
+    strikeContributions.push({
+      strike: K,
+      gamma: dollarGamma,
+      type: option.contractSymbol?.includes('C') ? 'call' : 'put'
+    });
+  }
+
+  // Dealer convention: negative of the sum (dealers are short gamma)
+  const dealerGamma = -totalGamma;
+  const gammaInBillions = dealerGamma / 1e9;
+  const sign = dealerGamma < 0 ? 'short' : 'long';
+
+  // Get top 3 contributors
+  const topStrikes = strikeContributions
+    .sort((a, b) => Math.abs(b.gamma) - Math.abs(a.gamma))
+    .slice(0, 3);
+
+  return {
+    unavailable: false,
+    value: gammaInBillions,
+    sign,
+    formatted: `${gammaInBillions > 0 ? '+' : ''}$${Math.abs(gammaInBillions).toFixed(1)}B (${sign})`,
+    topStrikes
+  };
+};
+
+// Task 4: Calculate Skew (±10% OTM)
+const calculateSkew = (optionsData, spotPrice) => {
+  if (optionsData.optionsUnavailable || !spotPrice) {
+    return { unavailable: true };
+  }
+
+  const putStrike = spotPrice * 0.9;  // 10% OTM put
+  const callStrike = spotPrice * 1.1; // 10% OTM call
+
+  // Find closest strikes and interpolate IV if needed
+  const findIV = (options, targetStrike) => {
+    const sorted = options
+      .filter(o => o.impliedVolatility > 0)
+      .sort((a, b) => a.strike - b.strike);
+
+    if (sorted.length === 0) return null;
+
+    // Find bracketing strikes
+    let lower = null, upper = null;
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].strike <= targetStrike) lower = sorted[i];
+      if (sorted[i].strike >= targetStrike && !upper) upper = sorted[i];
+    }
+
+    if (!lower && !upper) return null;
+    if (!lower) return upper.impliedVolatility;
+    if (!upper) return lower.impliedVolatility;
+    if (lower.strike === upper.strike) return lower.impliedVolatility;
+
+    // Linear interpolation
+    const weight = (targetStrike - lower.strike) / (upper.strike - lower.strike);
+    return lower.impliedVolatility + weight * (upper.impliedVolatility - lower.impliedVolatility);
+  };
+
+  const putIV = findIV(optionsData.puts, putStrike);
+  const callIV = findIV(optionsData.calls, callStrike);
+
+  if (!putIV || !callIV) {
+    return { unavailable: true };
+  }
+
+  // Skew = Put IV - Call IV (in percentage points)
+  const skew = (putIV - callIV) * 100;
+
+  return {
+    unavailable: false,
+    value: skew,
+    formatted: `${skew.toFixed(1)} pp`,
+    putIV: (putIV * 100).toFixed(1),
+    callIV: (callIV * 100).toFixed(1)
+  };
+};
+
+// Task 5: Clean and format news into evidence bullets
+const formatNewsEvidence = (newsString) => {
+  if (!newsString || newsString.trim() === '') {
+    return [];
+  }
+
+  // Split by periods, newlines, or semicolons
+  const sentences = newsString
+    .split(/[.\n;]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 10) // Filter out very short fragments
+    .map(s => {
+      // Clean up extra whitespace and punctuation
+      s = s.replace(/\s+/g, ' ').trim();
+      // Ensure it ends with a period
+      if (!s.match(/[.!?]$/)) s += '.';
+      return s;
+    })
+    .filter(s => s.length > 15); // Final filter for meaningful sentences
+
+  return sentences.slice(0, 5); // Limit to top 5 evidence points
 };
 
 // Test Claude API connection
@@ -135,77 +448,205 @@ app.post('/analyze', async (req, res) => {
   try {
     const { query, news } = req.body;
 
-    // Validate input
-    if (!query || !news) {
+    // Validate input - query is required, news can be empty
+    if (!query) {
       log('❌ /analyze - Missing required fields');
       return res.status(400).json({
         error: 'Missing required fields',
-        message: 'Please provide both "query" and "news" in request body'
+        message: 'Please provide "query" in request body'
       });
     }
+    
+    // Allow empty news string (for conceptual questions)
+    const newsText = news || '';
 
     log(`📊 /analyze - Processing query: "${query}"`);
 
-    // Construct the prompt for Claude
-    const prompt = `User question: ${query}
-
-Recent news headlines:
-${news}
-
-Provide a clear explanation of why this stock is moving today (2-3 sentences).
-
-Then give three distinct perspectives:
-
-1. BULLISH take (1-2 sentences explaining why this could be positive/buying opportunity)
-2. BEARISH take (1-2 sentences explaining why this could be negative/warning sign)
-3. NEUTRAL take (1-2 sentences explaining why this might be noise/wait-and-see)
-
-Keep each perspective concise and actionable.`;
-
-    // Call Claude API
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        messages: [{
-          role: 'user',
-          content: prompt
-        }]
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      log(`❌ /analyze - Claude API error: ${error.error?.message}`);
-      return res.status(response.status).json({
-        error: 'Claude API error',
-        message: error.error?.message || 'Unknown error occurred'
+    // Task 1: Check if query is asking for investment advice
+    if (isAdviceSeekingQuery(query)) {
+      log('🚫 /analyze - Advice-seeking query detected, returning non-advice message');
+      return res.json({
+        success: true,
+        analysis: "I can't provide investment advice. I can show what's moving, explain drivers, or summarize risks. Try: 'Summarize my watchlist' or 'Why did NVDA move today?'",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0
+        }
       });
     }
 
-    const data = await response.json();
-    log('✅ /analyze - Analysis completed successfully');
+    // Task 1: Extract ticker symbol from query
+    const symbol = extractSymbol(query);
+    log(`🔍 /analyze - Extracted symbol: ${symbol || 'none'}`);
 
-    res.json({
-      success: true,
-      analysis: data.content[0].text,
-      usage: {
-        input_tokens: data.usage.input_tokens,
-        output_tokens: data.usage.output_tokens
+    // Task 5: Format news into clean evidence bullets
+    const evidence = formatNewsEvidence(newsText);
+    log(`📋 /analyze - Formatted ${evidence.length} evidence points`);
+
+    // Task 2: Fetch live price data from Alpaca if symbol found
+    let priceData = null;
+    let spotPrice = null;
+    if (symbol) {
+      priceData = await fetchAlpacaPrice(symbol);
+      spotPrice = priceData?.currentPrice;
+    }
+
+    // Task 3: Fetch options chain if symbol found
+    let optionsData = { optionsUnavailable: true };
+    if (symbol) {
+      optionsData = await fetchOptionsChain(symbol);
+      // Use Yahoo quote price if Alpaca failed
+      if (!spotPrice && optionsData.quote?.regularMarketPrice) {
+        spotPrice = optionsData.quote.regularMarketPrice;
+        log(`💰 Using Yahoo price for ${symbol}: $${spotPrice}`);
       }
-    });
+    }
+
+    // Task 4: Calculate quant metrics if options available
+    let gamma = { unavailable: true };
+    let skew = { unavailable: true };
+    if (!optionsData.optionsUnavailable && spotPrice) {
+      gamma = calculateDealerGamma(optionsData, spotPrice);
+      skew = calculateSkew(optionsData, spotPrice);
+      
+      if (!gamma.unavailable) {
+        log(`📊 Dealer Gamma: ${gamma.formatted}`);
+      }
+      if (!skew.unavailable) {
+        log(`📊 Skew: ${skew.formatted}`);
+      }
+    }
+
+    // Task 6: Construct strict prompt with output template
+    let prompt = `You are a financial analysis assistant. Analyze the following stock query and provide a structured response.
+
+USER QUERY: ${query}
+
+EVIDENCE:`;
+
+    if (evidence.length > 0) {
+      prompt += '\n' + evidence.map((e, i) => `${i + 1}. ${e}`).join('\n');
+    } else {
+      prompt += '\n(No specific evidence provided)';
+    }
+
+    // Add price data if available
+    if (priceData) {
+      prompt += `
+
+MARKET DATA (${priceData.symbol}):
+- Current: $${priceData.currentPrice}
+- Previous Close: $${priceData.prevClose}
+- Change: ${priceData.changePercent}% (${priceData.change > 0 ? '+' : ''}$${priceData.change.toFixed(2)})`;
+    }
+
+    // Add quant metrics if available
+    if (!gamma.unavailable || !skew.unavailable) {
+      prompt += `
+
+QUANT METRICS:`;
+      if (!gamma.unavailable) {
+        prompt += `\n- Dealer Gamma (0-30d): ${gamma.formatted}`;
+      }
+      if (!skew.unavailable) {
+        prompt += `\n- Skew (±10% OTM): ${skew.formatted} (Put IV: ${skew.putIV}%, Call IV: ${skew.callIV}%)`;
+      }
+    }
+
+    // Task 6: Strict output formatting instructions
+    prompt += `
+
+INSTRUCTIONS:
+1. Use ONLY the provided evidence and numbers above. If insufficient, state "insufficient evidence" in overview.
+2. NEVER recommend buy/sell/hold or give personal advice.
+3. Keep it concise; no markdown headers or emojis; no bullet lists in sentiment lines.
+4. ALWAYS include exactly three lines starting with "BULLISH:", "BEARISH:", and "NEUTRAL:".
+
+OUTPUT FORMAT (follow exactly):
+
+<Write 2-4 sentence overview explaining the situation.${!gamma.unavailable || !skew.unavailable ? ' Include one line about quant metrics if available.' : ''}>
+
+BULLISH: <1-2 sentences tied to evidence/metrics explaining positive perspective>
+
+BEARISH: <1-2 sentences tied to evidence/metrics explaining negative perspective>
+
+NEUTRAL: <1-2 sentences tied to evidence/metrics explaining wait-and-see perspective>
+
+${!optionsData.optionsUnavailable ? '' : 'Note: Options data unavailable for this symbol.'}
+
+Now provide your analysis:`;
+
+    // Call Claude API with fallback handling
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: prompt
+          }]
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        log(`❌ /analyze - Claude API error: ${error.error?.message}`);
+        
+        // Task 7: Return fallback message on Claude error
+        return res.json({
+          success: true,
+          analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0
+          }
+        });
+      }
+
+      const data = await response.json();
+      log('✅ /analyze - Analysis completed successfully');
+
+      res.json({
+        success: true,
+        analysis: data.content[0].text,
+        usage: {
+          input_tokens: data.usage.input_tokens,
+          output_tokens: data.usage.output_tokens
+        }
+      });
+
+    } catch (claudeError) {
+      // Task 7: Fallback for any Claude-related errors
+      log(`❌ /analyze - Claude error: ${claudeError.message}`);
+      
+      return res.json({
+        success: true,
+        analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0
+        }
+      });
+    }
 
   } catch (error) {
-    log(`❌ /analyze - Error: ${error.message}`);
-    res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
+    // Task 7: Final catch-all - return fallback instead of 500 error
+    log(`❌ /analyze - Unexpected error: ${error.message}`);
+    
+    res.json({
+      success: true,
+      analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0
+      }
     });
   }
 });
