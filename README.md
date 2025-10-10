@@ -340,7 +340,27 @@ curl https://your-app.onrender.com/test/all
 curl https://your-app.onrender.com/news/AAPL
 ```
 
-## Environment Variables
+## Local Python Bridge (yfinance)
+
+This service includes a **local Python helper** for options analytics using `yfinance`. It runs in the SAME Render service (no additional services needed).
+
+### How It Works
+
+1. **Python Bridge** (`./pybridge/options_bridge.py`):
+   - Fetches options chains from Yahoo Finance via yfinance
+   - Returns spot price, strikes, IV, OI for 0-30d expiries
+   - Outputs clean JSON for Node.js consumption
+
+2. **Node Wrapper** (`./lib/optionsProvider.js`):
+   - Spawns Python process with 2.5s timeout
+   - Caches results (5min TTL per symbol)
+   - Gracefully degrades if Python unavailable
+
+3. **Quant Calculations**:
+   - **Dealer Gamma (0-30d)**: Black-Scholes gamma × S² × 100 × OI, dealer convention (short/long)
+   - **Skew (±10% OTM)**: IV difference between 0.9S puts and 1.1S calls
+
+### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -348,7 +368,32 @@ curl https://your-app.onrender.com/news/AAPL
 | `FINNHUB_API_KEY` | Yes | Your Finnhub API key |
 | `ALPACA_API_KEY` | Yes | Your Alpaca Markets API key |
 | `ALPACA_SECRET_KEY` | Yes | Your Alpaca Markets secret key |
+| `OPTIONS_PROVIDER` | No | Options data source (default: `yfinance-local`) |
+| `OPT_MAX_DAYS` | No | Max days for options expiries (default: `30`) |
+| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `2`, max: `3`) |
+| `OPT_CACHE_TTL_SEC` | No | Cache TTL in seconds (default: `300`) |
+| `PYTHON_BIN` | No | Python binary path (default: `python3`) |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
+
+### Example Output with Quant
+
+```json
+{
+  "success": true,
+  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp.\n\nBULLISH: Strong demand momentum...\n\nBEARISH: Valuation concerns...\n\nNEUTRAL: Wait for confirmation...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (yfinance local @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
+}
+```
+
+### Graceful Degradation
+
+If options data is unavailable:
+- Response still includes BULLISH/BEARISH/NEUTRAL
+- Appends: "Note: Options data unavailable (no licensed options feed configured)."
+- No breaking errors or timeouts
+
+### No iOS Changes Required
+
+The response format remains `{ success, analysis, usage }` - quant metrics appear in the analysis text.
 
 ## Error Handling
 

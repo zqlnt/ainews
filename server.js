@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
+import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 
 // Load environment variables
 dotenv.config();
@@ -417,6 +418,111 @@ const formatNewsEvidence = (newsString) => {
   return sentences.slice(0, 5); // Limit to top 5 evidence points
 };
 
+// Calculate Dealer Gamma from yfinance rows
+const calculateDealerGammaFromRows = (rows, spotPrice) => {
+  if (!rows || rows.length === 0 || !spotPrice) {
+    return { unavailable: true };
+  }
+
+  let totalGamma = 0;
+  const strikeContributions = [];
+
+  for (const row of rows) {
+    const T = row.ttmDays / 365.25; // Convert days to years
+    const K = row.strike;
+    const IV = row.iv;
+    const OI = row.oi;
+
+    if (IV <= 0 || OI <= 0 || T <= 0) continue;
+
+    // Calculate gamma using Black-Scholes
+    const gamma = calculateGamma(spotPrice, K, T, IV);
+    
+    // Dollar gamma: Γ × S² × 100 × OI
+    const dollarGamma = gamma * spotPrice * spotPrice * 100 * OI;
+    
+    totalGamma += dollarGamma;
+    strikeContributions.push({ strike: K, gamma: dollarGamma, type: row.type });
+  }
+
+  if (strikeContributions.length === 0) {
+    return { unavailable: true };
+  }
+
+  // Dealer convention: negative of the sum (dealers are short gamma)
+  const dealerGamma = -totalGamma;
+  const gammaInBillions = dealerGamma / 1e9;
+  const sign = dealerGamma < 0 ? 'short' : 'long';
+
+  const topStrikes = strikeContributions
+    .sort((a, b) => Math.abs(b.gamma) - Math.abs(a.gamma))
+    .slice(0, 3);
+
+  return {
+    unavailable: false,
+    value: gammaInBillions,
+    sign,
+    formatted: `${gammaInBillions > 0 ? '+' : ''}$${Math.abs(gammaInBillions).toFixed(1)}B (${sign})`,
+    topStrikes
+  };
+};
+
+// Calculate Skew from yfinance rows
+const calculateSkewFromRows = (rows, spotPrice) => {
+  if (!rows || rows.length === 0 || !spotPrice) {
+    return { unavailable: true };
+  }
+
+  const putStrike = spotPrice * 0.9;  // 10% OTM put
+  const callStrike = spotPrice * 1.1; // 10% OTM call
+
+  // Find IV at target strikes (linear interpolation if needed)
+  const findIV = (options, targetStrike) => {
+    const sorted = options
+      .filter(o => o.iv > 0)
+      .sort((a, b) => a.strike - b.strike);
+
+    if (sorted.length === 0) return null;
+
+    // Find bracketing strikes
+    let lower = null, upper = null;
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].strike <= targetStrike) lower = sorted[i];
+      if (sorted[i].strike >= targetStrike && !upper) upper = sorted[i];
+    }
+
+    if (!lower && !upper) return null;
+    if (!lower) return upper.iv;
+    if (!upper) return lower.iv;
+    if (lower.strike === upper.strike) return lower.iv;
+
+    // Linear interpolation
+    const weight = (targetStrike - lower.strike) / (upper.strike - lower.strike);
+    return lower.iv + weight * (upper.iv - lower.iv);
+  };
+
+  const puts = rows.filter(r => r.type === 'put');
+  const calls = rows.filter(r => r.type === 'call');
+
+  const putIV = findIV(puts, putStrike);
+  const callIV = findIV(calls, callStrike);
+
+  if (!putIV || !callIV) {
+    return { unavailable: true };
+  }
+
+  // Skew = Put IV - Call IV (in percentage points)
+  const skew = (putIV - callIV) * 100;
+
+  return {
+    unavailable: false,
+    value: skew,
+    formatted: `${skew.toFixed(1)} pp`,
+    putIV: (putIV * 100).toFixed(1),
+    callIV: (callIV * 100).toFixed(1)
+  };
+};
+
 // Test Claude API connection
 const testClaudeAPI = async () => {
   try {
@@ -567,22 +673,23 @@ app.post('/analyze', async (req, res) => {
       }
     }
 
-    // Task 3: Fetch options chain if symbol found
-    let optionsData = { optionsUnavailable: true };
+    // Task 3: Fetch options via yfinance bridge if symbol found
+    let optionsData = { spot: null, rows: [], fetchedAt: null };
     if (symbol) {
-      const optionsTimestamp = new Date();
-      optionsData = await fetchOptionsChain(symbol);
-      if (!optionsData.optionsUnavailable) {
+      optionsData = await fetchOptions(symbol);
+      
+      if (optionsData.rows && optionsData.rows.length > 0) {
         dataSources.push({
-          source: 'Yahoo Finance',
+          source: 'Options (yfinance local)',
           type: 'options',
-          timestamp: optionsTimestamp
+          timestamp: new Date(optionsData.fetchedAt)
         });
       }
-      // Use Yahoo quote price if Alpaca failed
-      if (!spotPrice && optionsData.quote?.regularMarketPrice) {
-        spotPrice = optionsData.quote.regularMarketPrice;
-        log(`💰 Using Yahoo price for ${symbol}: $${spotPrice}`);
+      
+      // Use yfinance spot price if Alpaca failed
+      if (!spotPrice && optionsData.spot) {
+        spotPrice = optionsData.spot;
+        log(`💰 Using yfinance spot price for ${symbol}: $${spotPrice}`);
       }
     }
 
@@ -598,9 +705,11 @@ app.post('/analyze', async (req, res) => {
     // Task 4: Calculate quant metrics if options available
     let gamma = { unavailable: true };
     let skew = { unavailable: true };
-    if (!optionsData.optionsUnavailable && spotPrice) {
-      gamma = calculateDealerGamma(optionsData, spotPrice);
-      skew = calculateSkew(optionsData, spotPrice);
+    const hasOptionsData = optionsData.rows && optionsData.rows.length > 0;
+    
+    if (hasOptionsData && spotPrice) {
+      gamma = calculateDealerGammaFromRows(optionsData.rows, spotPrice);
+      skew = calculateSkewFromRows(optionsData.rows, spotPrice);
       
       if (!gamma.unavailable) {
         log(`📊 Dealer Gamma: ${gamma.formatted}`);
@@ -647,6 +756,15 @@ QUANT METRICS:`;
     }
 
     // Task 6: Strict output formatting instructions
+    const hasQuant = !gamma.unavailable || !skew.unavailable;
+    const quantInstruction = hasQuant 
+      ? ' Include one line with quant metrics in format: "Quant: Dealer Gamma (0-30d): X.XB (short/long); Skew (±10%): X.X pp."'
+      : '';
+    
+    const optionsNote = !hasQuant && hasOptionsData === false
+      ? '\n\nNote: Options data unavailable (no licensed options feed configured).'
+      : '';
+
     prompt += `
 
 INSTRUCTIONS:
@@ -657,15 +775,13 @@ INSTRUCTIONS:
 
 OUTPUT FORMAT (follow exactly):
 
-<Write 2-4 sentence overview explaining the situation.${!gamma.unavailable || !skew.unavailable ? ' Include one line about quant metrics if available.' : ''}>
+<Write 2-4 sentence overview explaining the situation.${quantInstruction}>
 
 BULLISH: <1-2 sentences tied to evidence/metrics explaining positive perspective>
 
 BEARISH: <1-2 sentences tied to evidence/metrics explaining negative perspective>
 
-NEUTRAL: <1-2 sentences tied to evidence/metrics explaining wait-and-see perspective>
-
-${!optionsData.optionsUnavailable ? '' : 'Note: Options data unavailable for this symbol.'}
+NEUTRAL: <1-2 sentences tied to evidence/metrics explaining wait-and-see perspective>${optionsNote}
 
 Now provide your analysis:`;
 
@@ -704,6 +820,14 @@ Now provide your analysis:`;
       }
 
       const data = await response.json();
+      
+      // Single-line logging of data pipeline
+      const priceSource = priceData ? 'Alpaca' : (optionsData.spot ? 'yfinance' : 'none');
+      const optionsSource = (optionsData.rows && optionsData.rows.length > 0) ? 'yfinance-local' : 'none';
+      const gammaStatus = !gamma.unavailable ? 'ok' : 'na';
+      const skewStatus = !skew.unavailable ? 'ok' : 'na';
+      log(`[INFO] symbol=${symbol || 'none'} price=${priceSource} options=${optionsSource} gamma=${gammaStatus} skew=${skewStatus}`);
+      
       log('✅ /analyze - Analysis completed successfully');
 
       // Format data sources footer
@@ -982,6 +1106,14 @@ app.get('/test/all', async (req, res) => {
       message: error.message
     });
   }
+});
+
+// GET /test/options - Test options provider
+app.get('/test/options', (req, res) => {
+  log('🧪 /test/options - Checking options provider');
+  res.json({
+    provider: getOptionsProvider()
+  });
 });
 
 // ==================== SERVER STARTUP ====================
