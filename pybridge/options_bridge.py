@@ -72,6 +72,9 @@ def main():
                             oi = int(row.get('openInterest', 0))
                             strike = float(row.get('strike', 0))
                             volume = int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0
+                            bid = float(row.get('bid', 0)) if pd.notna(row.get('bid')) else 0
+                            ask = float(row.get('ask', 0)) if pd.notna(row.get('ask')) else 0
+                            last_price = float(row.get('lastPrice', 0)) if pd.notna(row.get('lastPrice')) else 0
                             
                             # Filter: iv > 0, oi >= 0, ttmDays <= max_days
                             if iv > 0 and oi >= 0 and ttm_days <= max_days and strike > 0:
@@ -82,7 +85,10 @@ def main():
                                     "type": "call",
                                     "iv": round(iv, 4),
                                     "oi": oi,
-                                    "volume": volume
+                                    "volume": volume,
+                                    "bid": round(bid, 2) if bid > 0 else 0,
+                                    "ask": round(ask, 2) if ask > 0 else 0,
+                                    "lastPrice": round(last_price, 2) if last_price > 0 else 0
                                 })
                     
                     # Process puts
@@ -92,6 +98,9 @@ def main():
                             oi = int(row.get('openInterest', 0))
                             strike = float(row.get('strike', 0))
                             volume = int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0
+                            bid = float(row.get('bid', 0)) if pd.notna(row.get('bid')) else 0
+                            ask = float(row.get('ask', 0)) if pd.notna(row.get('ask')) else 0
+                            last_price = float(row.get('lastPrice', 0)) if pd.notna(row.get('lastPrice')) else 0
                             
                             if iv > 0 and oi >= 0 and ttm_days <= max_days and strike > 0:
                                 rows.append({
@@ -101,16 +110,97 @@ def main():
                                     "type": "put",
                                     "iv": round(iv, 4),
                                     "oi": oi,
-                                    "volume": volume
+                                    "volume": volume,
+                                    "bid": round(bid, 2) if bid > 0 else 0,
+                                    "ask": round(ask, 2) if ask > 0 else 0,
+                                    "lastPrice": round(last_price, 2) if last_price > 0 else 0
                                 })
         except:
             pass
+        
+        # Calculate additional metrics if we have spot and rows
+        atm_iv = None
+        put_call_volume_ratio = None
+        implied_move = None
+        
+        if spot and rows:
+            # Find nearest expiry for metrics (use first expiry ≤ 30d)
+            expiries_in_data = sorted(set(r['expiryUTC'] for r in rows))
+            if expiries_in_data:
+                nearest_expiry = expiries_in_data[0]
+                expiry_rows = [r for r in rows if r['expiryUTC'] == nearest_expiry]
+                
+                # 1. ATM IV: Find strike nearest to spot
+                if expiry_rows:
+                    strikes = sorted(set(r['strike'] for r in expiry_rows))
+                    atm_strike = min(strikes, key=lambda s: abs(s - spot))
+                    
+                    atm_call = next((r for r in expiry_rows if r['strike'] == atm_strike and r['type'] == 'call'), None)
+                    atm_put = next((r for r in expiry_rows if r['strike'] == atm_strike and r['type'] == 'put'), None)
+                    
+                    if atm_call and atm_put:
+                        avg_iv = (atm_call['iv'] + atm_put['iv']) / 2
+                        atm_iv = {
+                            "percent": round(avg_iv * 100, 1),
+                            "decimal": round(avg_iv, 4),
+                            "strike": atm_strike
+                        }
+                    elif atm_call:
+                        atm_iv = {
+                            "percent": round(atm_call['iv'] * 100, 1),
+                            "decimal": round(atm_call['iv'], 4),
+                            "strike": atm_strike
+                        }
+                    elif atm_put:
+                        atm_iv = {
+                            "percent": round(atm_put['iv'] * 100, 1),
+                            "decimal": round(atm_put['iv'], 4),
+                            "strike": atm_strike
+                        }
+                
+                # 2. Put/Call Volume Ratio (for nearest expiry)
+                total_call_vol = sum(r['volume'] for r in expiry_rows if r['type'] == 'call')
+                total_put_vol = sum(r['volume'] for r in expiry_rows if r['type'] == 'put')
+                
+                if total_call_vol > 0:
+                    pcr = total_put_vol / total_call_vol
+                    put_call_volume_ratio = {
+                        "ratio": round(pcr, 2),
+                        "window": "expiry"
+                    }
+                
+                # 3. Implied Move (ATM straddle)
+                if atm_call and atm_put:
+                    # Calculate mid price for call
+                    call_mid = None
+                    if atm_call['bid'] > 0 and atm_call['ask'] > 0:
+                        call_mid = (atm_call['bid'] + atm_call['ask']) / 2
+                    elif atm_call['lastPrice'] > 0:
+                        call_mid = atm_call['lastPrice']
+                    
+                    # Calculate mid price for put
+                    put_mid = None
+                    if atm_put['bid'] > 0 and atm_put['ask'] > 0:
+                        put_mid = (atm_put['bid'] + atm_put['ask']) / 2
+                    elif atm_put['lastPrice'] > 0:
+                        put_mid = atm_put['lastPrice']
+                    
+                    if call_mid and put_mid:
+                        straddle = call_mid + put_mid
+                        implied_move = {
+                            "abs": round(straddle, 2),
+                            "pct": round((straddle / spot) * 100, 1),
+                            "expiry": nearest_expiry
+                        }
         
         # Output result
         result = {
             "spot": round(spot, 2) if spot else None,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "rows": rows
+            "rows": rows,
+            "atm_iv": atm_iv,
+            "put_call_volume_ratio": put_call_volume_ratio,
+            "implied_move": implied_move
         }
         
         print(json.dumps(result))

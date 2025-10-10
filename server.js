@@ -705,11 +705,17 @@ app.post('/analyze', async (req, res) => {
     // Task 4: Calculate quant metrics if options available
     let gamma = { unavailable: true };
     let skew = { unavailable: true };
+    let atmIV = null;
+    let putCallRatio = null;
+    let impliedMove = null;
     const hasOptionsData = optionsData.rows && optionsData.rows.length > 0;
     
     if (hasOptionsData && spotPrice) {
       gamma = calculateDealerGammaFromRows(optionsData.rows, spotPrice);
       skew = calculateSkewFromRows(optionsData.rows, spotPrice);
+      atmIV = optionsData.atmIV;
+      putCallRatio = optionsData.putCallVolumeRatio;
+      impliedMove = optionsData.impliedMove;
       
       if (!gamma.unavailable) {
         log(`📊 Dealer Gamma: ${gamma.formatted}`);
@@ -717,6 +723,12 @@ app.post('/analyze', async (req, res) => {
       if (!skew.unavailable) {
         log(`📊 Skew: ${skew.formatted}`);
       }
+      
+      // Log new metrics
+      const atmIVStr = atmIV ? `${atmIV.percent}%` : 'null';
+      const pcrStr = putCallRatio ? putCallRatio.ratio : 'null';
+      const impMvStr = impliedMove ? `${impliedMove.pct}%` : 'null';
+      log(`[METRICS] sym=${symbol} atm_iv=${atmIVStr} pcr=${pcrStr} impmv=${impMvStr}`);
     }
 
     // Task 6: Construct strict prompt with output template
@@ -743,7 +755,8 @@ MARKET DATA (${priceData.symbol}):
     }
 
     // Add quant metrics if available
-    if (!gamma.unavailable || !skew.unavailable) {
+    const hasAnyQuant = !gamma.unavailable || !skew.unavailable || atmIV || putCallRatio || impliedMove;
+    if (hasAnyQuant) {
       prompt += `
 
 QUANT METRICS:`;
@@ -753,12 +766,29 @@ QUANT METRICS:`;
       if (!skew.unavailable) {
         prompt += `\n- Skew (±10% OTM): ${skew.formatted} (Put IV: ${skew.putIV}%, Call IV: ${skew.callIV}%)`;
       }
+      if (atmIV) {
+        prompt += `\n- ATM IV: ${atmIV.percent}% @ strike ${atmIV.strike}`;
+      }
+      if (putCallRatio) {
+        prompt += `\n- Put/Call Volume Ratio: ${putCallRatio.ratio}`;
+      }
+      if (impliedMove) {
+        prompt += `\n- Implied Move (ATM straddle): $${impliedMove.abs} (${impliedMove.pct}%)`;
+      }
     }
 
     // Task 6: Strict output formatting instructions
-    const hasQuant = !gamma.unavailable || !skew.unavailable;
+    // Build Quant instruction dynamically based on available metrics
+    let quantParts = [];
+    if (!gamma.unavailable) quantParts.push('Dealer Gamma (0-30d): X.XB (short/long)');
+    if (!skew.unavailable) quantParts.push('Skew (±10%): X.X pp');
+    if (atmIV) quantParts.push('ATM IV: X.X%@strike');
+    if (putCallRatio) quantParts.push('Put/Call Vol Ratio: X.XX');
+    if (impliedMove) quantParts.push('Implied Move: $X.XX (X.X%)');
+    
+    const hasQuant = quantParts.length > 0;
     const quantInstruction = hasQuant 
-      ? ' Include one line with quant metrics in format: "Quant: Dealer Gamma (0-30d): X.XB (short/long); Skew (±10%): X.X pp."'
+      ? ` Include one line with quant metrics in format: "Quant: ${quantParts.join('; ')}"`
       : '';
     
     const optionsNote = !hasQuant && hasOptionsData === false
