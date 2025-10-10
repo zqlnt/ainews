@@ -20,8 +20,8 @@ def main():
         
         symbol = sys.argv[1].upper()
         max_days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 2
-        num_expiries = min(num_expiries, 3)  # Cap at 3
+        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 3  # Fetch 3 by default
+        num_expiries = min(num_expiries, 5)  # Cap at 5 to ensure we get valid data
         
         import yfinance as yf
         import pandas as pd
@@ -58,8 +58,8 @@ def main():
                     now = datetime.now(timezone.utc)
                     ttm_days = (expiry_utc - now).total_seconds() / 86400
                     
-                    # Skip if beyond max_days
-                    if ttm_days > max_days:
+                    # Skip if expired or beyond max_days
+                    if ttm_days < 0 or ttm_days > max_days:
                         continue
                     
                     # Get options chain
@@ -76,8 +76,8 @@ def main():
                             ask = float(row.get('ask', 0)) if pd.notna(row.get('ask')) else 0
                             last_price = float(row.get('lastPrice', 0)) if pd.notna(row.get('lastPrice')) else 0
                             
-                            # Filter: iv > 0, oi >= 0, ttmDays <= max_days
-                            if iv > 0 and oi >= 0 and ttm_days <= max_days and strike > 0:
+                            # Filter: iv > 0, oi >= 0, not expired, ttmDays <= max_days
+                            if iv > 0 and oi >= 0 and ttm_days > 0 and ttm_days <= max_days and strike > 0:
                                 rows.append({
                                     "expiryUTC": expiry_utc.isoformat(),
                                     "ttmDays": round(ttm_days, 2),
@@ -102,7 +102,7 @@ def main():
                             ask = float(row.get('ask', 0)) if pd.notna(row.get('ask')) else 0
                             last_price = float(row.get('lastPrice', 0)) if pd.notna(row.get('lastPrice')) else 0
                             
-                            if iv > 0 and oi >= 0 and ttm_days <= max_days and strike > 0:
+                            if iv > 0 and oi >= 0 and ttm_days > 0 and ttm_days <= max_days and strike > 0:
                                 rows.append({
                                     "expiryUTC": expiry_utc.isoformat(),
                                     "ttmDays": round(ttm_days, 2),
