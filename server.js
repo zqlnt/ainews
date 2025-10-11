@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 import { initCacheWarmer } from './lib/cacheWarmer.js';
+import { validateAnalysisV2, parseFromLegacyText, buildLegacyText } from './lib/analysisValidator.js';
 
 // Load environment variables
 dotenv.config();
@@ -595,6 +596,104 @@ const testFinnhubAPI = async () => {
   }
 };
 
+/**
+ * Call Claude API with structured output (tool calling)
+ * Returns { success, data: { text, structured }, usage }
+ * 
+ * @param {string} prompt - The prompt to send to Claude
+ * @param {boolean} requestStructured - Whether to request structured JSON output
+ * @returns {Promise<Object>}
+ */
+const callClaudeAPI = async (prompt, requestStructured = true) => {
+  const tools = requestStructured ? [{
+    name: "provide_analysis",
+    description: "Provide structured stock analysis with intro, sentiment perspectives, and confidence scores",
+    input_schema: {
+      type: "object",
+      properties: {
+        intro: {
+          type: "string",
+          description: "2-4 sentence overview of the situation, including quant metrics if available"
+        },
+        bullish: {
+          type: "string",
+          description: "1-2 sentences explaining the bullish/positive perspective based on evidence"
+        },
+        bearish: {
+          type: "string",
+          description: "1-2 sentences explaining the bearish/negative perspective based on evidence"
+        },
+        neutral: {
+          type: "string",
+          description: "1-2 sentences explaining the neutral/wait-and-see perspective based on evidence"
+        },
+        confidence: {
+          type: "object",
+          properties: {
+            bullish: { type: "number", description: "Confidence in bullish view (0.0-1.0)" },
+            bearish: { type: "number", description: "Confidence in bearish view (0.0-1.0)" },
+            neutral: { type: "number", description: "Confidence in neutral view (0.0-1.0)" }
+          },
+          required: ["bullish", "bearish", "neutral"]
+        }
+      },
+      required: ["intro", "bullish", "bearish", "neutral", "confidence"]
+    }
+  }] : undefined;
+
+  const body = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: prompt
+    }]
+  };
+
+  if (tools) {
+    body.tools = tools;
+    body.tool_choice = { type: "tool", name: "provide_analysis" };
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': CLAUDE_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Claude API error');
+  }
+
+  const data = await response.json();
+
+  // Extract text and structured data
+  let textContent = '';
+  let structuredData = null;
+
+  for (const content of data.content) {
+    if (content.type === 'text') {
+      textContent += content.text;
+    } else if (content.type === 'tool_use' && content.name === 'provide_analysis') {
+      structuredData = content.input;
+    }
+  }
+
+  return {
+    success: true,
+    data: {
+      text: textContent || null,
+      structured: structuredData
+    },
+    usage: data.usage
+  };
+};
+
 // ==================== ENDPOINTS ====================
 
 // Health check endpoint
@@ -615,7 +714,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// POST /analyze - Claude AI stock analysis
+// POST /analyze - Claude AI stock analysis (with structured v2 output)
 app.post('/analyze', async (req, res) => {
   try {
     const { query, news } = req.body;
@@ -637,9 +736,22 @@ app.post('/analyze', async (req, res) => {
     // Task 1: Check if query is asking for investment advice
     if (isAdviceSeekingQuery(query)) {
       log('🚫 /analyze - Advice-seeking query detected, returning non-advice message');
+      const adviceText = "I can't provide investment advice. I can show what's moving, explain drivers, or summarize risks. Try: 'Summarize my watchlist' or 'Why did NVDA move today?'";
+      
       return res.json({
         success: true,
-        analysis: "I can't provide investment advice. I can show what's moving, explain drivers, or summarize risks. Try: 'Summarize my watchlist' or 'Why did NVDA move today?'",
+        schema_version: "2.0",
+        analysis: adviceText,
+        analysis_v2: validateAnalysisV2({
+          intro: adviceText,
+          bullish: null,
+          bearish: null,
+          neutral: null
+        }, {
+          ticker: null,
+          sources: [],
+          parseStatus: 'ok'
+        }),
         usage: {
           input_tokens: 0,
           output_tokens: 0
@@ -655,8 +767,9 @@ app.post('/analyze', async (req, res) => {
     const evidence = formatNewsEvidence(newsText);
     log(`📋 /analyze - Formatted ${evidence.length} evidence points`);
 
-    // Track data source timestamps
-    const dataSources = [];
+    // Track data source timestamps (for both legacy footer and v2 sources)
+    const dataSources = []; // Legacy format: { source, type, timestamp }
+    const sourcesV2 = []; // V2 format: { type, provider, timestamp, status, freshness_seconds }
 
     // Task 2: Fetch live price data from Alpaca if symbol found
     let priceData = null;
@@ -671,6 +784,13 @@ app.post('/analyze', async (req, res) => {
           type: 'price',
           timestamp: priceTimestamp
         });
+        sourcesV2.push({
+          type: 'price',
+          provider: 'Alpaca',
+          timestamp: priceTimestamp.toISOString(),
+          status: 'ok',
+          freshness_seconds: 0 // Will be computed during validation
+        });
       }
     }
 
@@ -679,11 +799,31 @@ app.post('/analyze', async (req, res) => {
     if (symbol) {
       optionsData = await fetchOptions(symbol);
       
-      if (optionsData.rows && optionsData.rows.length > 0) {
+      const hasOptionsData = optionsData.rows && optionsData.rows.length > 0;
+      const isStale = optionsData.isStale || false;
+      
+      if (hasOptionsData) {
+        const optionsTimestamp = new Date(optionsData.fetchedAt);
         dataSources.push({
           source: 'Options (yfinance local)',
           type: 'options',
-          timestamp: new Date(optionsData.fetchedAt)
+          timestamp: optionsTimestamp
+        });
+        sourcesV2.push({
+          type: 'options',
+          provider: 'yfinance',
+          timestamp: optionsTimestamp.toISOString(),
+          status: isStale ? 'stale' : 'ok',
+          freshness_seconds: 0 // Will be computed during validation
+        });
+      } else {
+        // Options attempted but unavailable
+        sourcesV2.push({
+          type: 'options',
+          provider: 'yfinance',
+          timestamp: new Date().toISOString(),
+          status: 'unavailable',
+          freshness_seconds: 0
         });
       }
       
@@ -700,6 +840,13 @@ app.post('/analyze', async (req, res) => {
         source: 'Finnhub',
         type: 'news',
         timestamp: new Date()
+      });
+      sourcesV2.push({
+        type: 'news',
+        provider: 'Finnhub',
+        timestamp: new Date().toISOString(),
+        status: 'ok',
+        freshness_seconds: 0
       });
     }
 
@@ -821,98 +968,141 @@ NEUTRAL: <1-2 sentences tied to evidence/metrics explaining wait-and-see perspec
 
 Now provide your analysis:`;
 
-    // Call Claude API with fallback handling
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          messages: [{
-            role: 'user',
-            content: prompt
-          }]
-        })
-      });
+    // Call Claude API with structured output and retry logic
+    let claudeResult = null;
+    let parseStatus = 'ok';
+    let retryCount = 0;
+    const maxRetries = 1;
 
-      if (!response.ok) {
-        const error = await response.json();
-        log(`❌ /analyze - Claude API error: ${error.error?.message}`);
+    // Attempt 1: Try structured output
+    try {
+      log('🤖 Calling Claude with structured output (attempt 1)...');
+      claudeResult = await callClaudeAPI(prompt, true);
+      
+      if (!claudeResult.data.structured) {
+        log('⚠️  Structured output missing, attempting retry...');
+        throw new Error('Structured output not returned');
+      }
+      
+      log('✅ Received structured output from Claude');
+    } catch (error) {
+      log(`⚠️  Structured output failed: ${error.message}`);
+      
+      // Attempt 2: Retry once
+      if (retryCount < maxRetries) {
+        retryCount++;
+        try {
+          log('🔄 Retrying Claude call with structured output (attempt 2)...');
+          claudeResult = await callClaudeAPI(prompt, true);
+          
+          if (!claudeResult.data.structured) {
+            log('⚠️  Structured output still missing, falling back to text parsing...');
+            throw new Error('Structured output not returned on retry');
+          }
+          
+          log('✅ Received structured output from Claude on retry');
+          parseStatus = 'coerced';
+        } catch (retryError) {
+          log(`❌ Retry failed: ${retryError.message}, falling back to legacy text parsing`);
+          parseStatus = 'fallback_legacy';
+        }
+      }
+    }
+
+    // If both structured attempts failed, try without structured output
+    if (!claudeResult || !claudeResult.data.structured) {
+      try {
+        log('🔄 Calling Claude without structured output (fallback)...');
+        claudeResult = await callClaudeAPI(prompt, false);
+        parseStatus = 'fallback_legacy';
+      } catch (fallbackError) {
+        log(`❌ /analyze - All Claude attempts failed: ${fallbackError.message}`);
         
-        // Task 7: Return fallback message on Claude error
+        // Return generic fallback
+        const fallbackText = "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.";
+        
         return res.json({
           success: true,
-          analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
+          schema_version: "2.0",
+          analysis: fallbackText,
+          analysis_v2: validateAnalysisV2({
+            intro: fallbackText,
+            bullish: "Market conditions may present opportunities.",
+            bearish: "Caution is warranted in current conditions.",
+            neutral: "Consider waiting for more clarity before taking action."
+          }, {
+            ticker: symbol,
+            sources: sourcesV2,
+            parseStatus: 'fallback_legacy'
+          }),
           usage: {
             input_tokens: 0,
             output_tokens: 0
           }
         });
       }
-
-      const data = await response.json();
-      
-      // Single-line logging of data pipeline
-      const priceSource = priceData ? 'Alpaca' : (optionsData.spot ? 'yfinance' : 'none');
-      const optionsSource = (optionsData.rows && optionsData.rows.length > 0) ? 'yfinance-local' : 'none';
-      const gammaStatus = !gamma.unavailable ? 'ok' : 'na';
-      const skewStatus = !skew.unavailable ? 'ok' : 'na';
-      log(`[INFO] symbol=${symbol || 'none'} price=${priceSource} options=${optionsSource} gamma=${gammaStatus} skew=${skewStatus}`);
-      
-      log('✅ /analyze - Analysis completed successfully');
-
-      // Format data sources footer
-      let analysis = data.content[0].text;
-      
-      if (dataSources.length > 0) {
-        const formatTime = (date) => {
-          const hours = date.getUTCHours().toString().padStart(2, '0');
-          const minutes = date.getUTCMinutes().toString().padStart(2, '0');
-          return `${hours}:${minutes} UTC`;
-        };
-
-        const sourceLines = dataSources.map(ds => 
-          `• ${ds.source} (${ds.type} @ ${formatTime(ds.timestamp)})`
-        );
-
-        analysis += `\n\n—\nData sources:\n${sourceLines.join('\n')}`;
-      }
-
-      res.json({
-        success: true,
-        analysis: analysis,
-        usage: {
-          input_tokens: data.usage.input_tokens,
-          output_tokens: data.usage.output_tokens
-        }
-      });
-
-    } catch (claudeError) {
-      // Task 7: Fallback for any Claude-related errors
-      log(`❌ /analyze - Claude error: ${claudeError.message}`);
-      
-      return res.json({
-        success: true,
-        analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
-        usage: {
-          input_tokens: 0,
-          output_tokens: 0
-        }
-      });
     }
+
+    // Build analysis_v2 from structured or parsed text
+    let rawAnalysis = null;
+    if (claudeResult.data.structured) {
+      rawAnalysis = claudeResult.data.structured;
+    } else if (claudeResult.data.text) {
+      // Parse legacy text format
+      rawAnalysis = parseFromLegacyText(claudeResult.data.text);
+    }
+
+    // Validate and build analysis_v2
+    const analysisV2 = validateAnalysisV2(rawAnalysis, {
+      ticker: symbol,
+      sources: sourcesV2,
+      parseStatus
+    });
+
+    // Build legacy analysis text
+    const legacyAnalysis = buildLegacyText(analysisV2, dataSources);
+
+    // Single-line logging of data pipeline
+    const priceSource = priceData ? 'Alpaca' : (optionsData.spot ? 'yfinance' : 'none');
+    const optionsSource = (optionsData.rows && optionsData.rows.length > 0) ? 'yfinance-local' : 'none';
+    const gammaStatus = !gamma.unavailable ? 'ok' : 'na';
+    const skewStatus = !skew.unavailable ? 'ok' : 'na';
+    log(`[INFO] symbol=${symbol || 'none'} price=${priceSource} options=${optionsSource} gamma=${gammaStatus} skew=${skewStatus} parse=${parseStatus}`);
+    
+    log('✅ /analyze - Analysis completed successfully');
+
+    // Return response with both schemas
+    res.json({
+      success: true,
+      schema_version: "2.0",
+      analysis: legacyAnalysis,
+      analysis_v2: analysisV2,
+      usage: {
+        input_tokens: claudeResult.usage.input_tokens || 0,
+        output_tokens: claudeResult.usage.output_tokens || 0
+      }
+    });
 
   } catch (error) {
     // Task 7: Final catch-all - return fallback instead of 500 error
     log(`❌ /analyze - Unexpected error: ${error.message}`);
     
+    const fallbackText = "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.";
+    
     res.json({
       success: true,
-      analysis: "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.",
+      schema_version: "2.0",
+      analysis: fallbackText,
+      analysis_v2: validateAnalysisV2({
+        intro: fallbackText,
+        bullish: "Market conditions may present opportunities.",
+        bearish: "Caution is warranted in current conditions.",
+        neutral: "Consider waiting for more clarity before taking action."
+      }, {
+        ticker: null,
+        sources: [],
+        parseStatus: 'fallback_legacy'
+      }),
       usage: {
         input_tokens: 0,
         output_tokens: 0

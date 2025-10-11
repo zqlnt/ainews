@@ -16,6 +16,76 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
 - 🚀 **Production-ready** with proper error handling
 - 🌐 **CORS enabled** for iOS app integration
 
+## 🆕 Schema V2 - Structured Analysis Response
+
+**New in v2.0**: The `/analyze` endpoint now returns both legacy text format AND structured JSON output.
+
+### Response Structure
+
+```json
+{
+  "success": true,
+  "schema_version": "2.0",
+  "analysis": "...legacy text format...",
+  "analysis_v2": {
+    "intro": "2-4 sentence overview including quant metrics",
+    "bullish": "Bullish perspective (or null if unavailable)",
+    "bearish": "Bearish perspective (or null if unavailable)",
+    "neutral": "Neutral perspective (or null if unavailable)",
+    "sources": [
+      {
+        "type": "price|options|news",
+        "provider": "Alpaca|yfinance|Finnhub",
+        "timestamp": "2025-10-11T16:43:38.457Z",
+        "status": "ok|stale|unavailable",
+        "freshness_seconds": 13
+      }
+    ],
+    "meta": {
+      "ticker": "AAPL",
+      "generated_at": "2025-10-11T16:43:51.140Z",
+      "confidence": {
+        "bullish": 0.4,
+        "bearish": 0.4,
+        "neutral": 0.6
+      },
+      "parse_status": "ok|coerced|fallback_legacy"
+    }
+  },
+  "usage": {
+    "input_tokens": 1098,
+    "output_tokens": 436
+  }
+}
+```
+
+### Key Features
+
+- **Backward Compatible**: Legacy `analysis` field remains unchanged for existing clients
+- **Structured Sections**: Parse-friendly bullish/bearish/neutral perspectives
+- **Confidence Scores**: 0.0-1.0 scores for each perspective
+- **Data Transparency**: Sources array with freshness indicators
+- **Graceful Degradation**: Sections can be null; parse_status indicates quality
+- **Validation & Coercion**: All fields validated, clamped, and sanitized server-side
+
+### Parse Status Values
+
+- `ok`: Structured output received from Claude successfully
+- `coerced`: Structured output received after retry
+- `fallback_legacy`: Parsed from text format (structured generation failed)
+
+### Confidence Scores
+
+- **Range**: Always 0.0 to 1.0 (clamped and rounded to 2 decimals)
+- **Source**: Provided by Claude AI based on evidence strength
+- **Fallback**: If section is null → 0.0, else 0.6 default
+
+### Source Status Values
+
+- `ok`: Data fresh and successfully fetched
+- `stale`: Cached data older than fresh TTL but within stale window
+- `unavailable`: Data fetch failed or not available
+
 ## Latest Updates
 
 ### ✅ Symbol & Intent Detection
