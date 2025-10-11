@@ -756,10 +756,14 @@ MARKET DATA (${priceData.symbol}):
 
     // Add quant metrics if available
     const hasAnyQuant = !gamma.unavailable || !skew.unavailable || atmIV || putCallRatio || impliedMove;
+    const isStaleData = optionsData.isStale || false;
+    const dataAge = isStaleData && optionsData.cacheAge ? Math.round(optionsData.cacheAge / 60000) : 0; // minutes
+    
     if (hasAnyQuant) {
+      const dataAgeNote = isStaleData ? ` (cached ${dataAge} min ago)` : '';
       prompt += `
 
-QUANT METRICS:`;
+QUANT METRICS${dataAgeNote}:`;
       if (!gamma.unavailable) {
         prompt += `\n- Dealer Gamma (0-30d): ${gamma.formatted}`;
       }
@@ -787,8 +791,9 @@ QUANT METRICS:`;
     if (impliedMove) quantParts.push('Implied Move: $X.XX (X.X%)');
     
     const hasQuant = quantParts.length > 0;
+    const cacheNote = isStaleData && dataAge > 0 ? ` (cached ${dataAge} min ago)` : '';
     const quantInstruction = hasQuant 
-      ? ` Include one line with quant metrics in format: "Quant: ${quantParts.join('; ')}"`
+      ? ` Include one line with quant metrics in format: "Quant${cacheNote}: ${quantParts.join('; ')}"`
       : '';
     
     const optionsNote = !hasQuant && hasOptionsData === false

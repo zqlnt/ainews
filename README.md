@@ -69,6 +69,18 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
   - Represents market's expected move by expiry
   - Format: e.g., "$12.80 (2.7%)"
 
+### ✅ Smart Caching for Quant Data
+- **Goal**: Ensure quant metrics appear in EVERY response (not just when real-time fetch succeeds)
+- **Strategy**: Stale-while-revalidate pattern
+  1. **Fresh Cache (4 hours)**: Return immediately if cached < 4 hours ago
+  2. **Try Fresh Fetch**: Attempt to fetch new data from yfinance
+  3. **Fallback to Stale (24 hours)**: If fetch fails, serve cached data from last 24 hours
+  4. **Show Data Age**: Quant line includes timestamp when using cached data
+- **Example**:
+  - Fresh: `Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp...`
+  - Cached: `Quant (cached 47 min ago): Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp...`
+- **Result**: Users always get quant data with transparency about freshness
+
 ### ✅ News Evidence Formatting
 - **Cleans raw news string**: Strips line breaks, weird punctuation, empty lines
 - **Formats as bullets**: Transforms into clean evidence points
@@ -371,9 +383,11 @@ This service includes a **local Python helper** for options analytics using `yfi
    - Outputs clean JSON for Node.js consumption
 
 2. **Node Wrapper** (`./lib/optionsProvider.js`):
-   - Spawns Python process with 2.5s timeout
-   - Caches results (5min TTL per symbol)
+   - Spawns Python process with 15s timeout
+   - **Smart caching**: Fresh cache (4 hours), stale cache (24 hours)
+   - **Stale-while-revalidate**: Serves cached data if fresh fetch fails
    - Gracefully degrades if Python unavailable
+   - Always shows data age in quant line when using cached data
 
 3. **Quant Calculations**:
    - **Dealer Gamma (0-30d)**: Black-Scholes gamma × S² × 100 × OI, dealer convention (short/long)
@@ -389,8 +403,9 @@ This service includes a **local Python helper** for options analytics using `yfi
 | `ALPACA_SECRET_KEY` | Yes | Your Alpaca Markets secret key |
 | `OPTIONS_PROVIDER` | No | Options data source (default: `yfinance-local`) |
 | `OPT_MAX_DAYS` | No | Max days for options expiries (default: `30`) |
-| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `2`, max: `3`) |
-| `OPT_CACHE_TTL_SEC` | No | Cache TTL in seconds (default: `300`) |
+| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `2`, max: `5`) |
+| `OPT_CACHE_TTL_SEC` | No | Fresh cache TTL in seconds (default: `14400` = 4 hours) |
+| `OPT_STALE_TTL_SEC` | No | Stale cache TTL in seconds (default: `86400` = 24 hours) |
 | `PYTHON_BIN` | No | Python binary path (default: `python3`) |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
 
