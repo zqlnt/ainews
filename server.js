@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
+import { initCacheWarmer } from './lib/cacheWarmer.js';
 
 // Load environment variables
 dotenv.config();
@@ -1179,5 +1180,16 @@ app.listen(PORT, async () => {
   log('');
   log('API is ready to accept requests');
   log('');
+  
+  // Initialize cache warmer for popular symbols
+  // This ensures quant data is available immediately after server restart
+  log('🔥 Initializing options cache warmer...');
+  initCacheWarmer({
+    immediate: true,    // Start warming cache now (in background)
+    background: true,   // Enable periodic refresh every 2 hours
+    sequential: true    // Fetch one symbol at a time (safer for free tier)
+  }).catch(err => {
+    log(`⚠️  Cache warmer initialization error: ${err.message}`);
+  });
 });
 
