@@ -20,8 +20,8 @@ def main():
         
         symbol = sys.argv[1].upper()
         max_days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 3  # Fetch 3 by default
-        num_expiries = min(num_expiries, 5)  # Cap at 5 to ensure we get valid data
+        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 5  # Fetch 5 by default
+        num_expiries = min(max(num_expiries, 3), 8)  # Min 3, max 8 expiries
         
         import yfinance as yf
         import pandas as pd
@@ -46,20 +46,32 @@ def main():
         try:
             expiries = ticker.options
             if expiries:
-                # Get nearest N expiries
-                expiries_to_fetch = list(expiries)[:num_expiries]
+                # Filter out expired expiries BEFORE fetching chains
+                now = datetime.now(timezone.utc)
+                valid_expiries = []
                 
-                for expiry_str in expiries_to_fetch:
+                for expiry_str in expiries[:num_expiries * 2]:  # Check 2x to find enough valid ones
+                    expiry_date = pd.to_datetime(expiry_str)
+                    expiry_utc = expiry_date.tz_localize('UTC').replace(hour=0, minute=0, second=0)
+                    ttm_days = (expiry_utc - now).total_seconds() / 86400
+                    
+                    # Only include non-expired expiries within max_days
+                    if ttm_days > 0 and ttm_days <= max_days:
+                        valid_expiries.append(expiry_str)
+                        if len(valid_expiries) >= num_expiries:
+                            break
+                
+                # Fetch option chains for valid expiries only
+                for expiry_str in valid_expiries:
                     # Parse expiry date
                     expiry_date = pd.to_datetime(expiry_str)
                     expiry_utc = expiry_date.tz_localize('UTC').replace(hour=0, minute=0, second=0)
                     
                     # Calculate days to expiry
-                    now = datetime.now(timezone.utc)
                     ttm_days = (expiry_utc - now).total_seconds() / 86400
                     
-                    # Skip if expired or beyond max_days
-                    if ttm_days < 0 or ttm_days > max_days:
+                    # Skip if expired or beyond max_days (safety check)
+                    if ttm_days <= 0 or ttm_days > max_days:
                         continue
                     
                     # Get options chain
