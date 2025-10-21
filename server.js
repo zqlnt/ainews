@@ -5,6 +5,8 @@ import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 import { initCacheWarmer } from './lib/cacheWarmer.js';
 import { validateAnalysisV2, parseFromLegacyText, buildLegacyText } from './lib/analysisValidator.js';
+import newsRouter from './routes/news.js';
+import imgRouter from './routes/img.js';
 
 // Load environment variables
 dotenv.config();
@@ -1341,6 +1343,14 @@ app.get('/test/options', (req, res) => {
     provider: getOptionsProvider()
   });
 });
+
+// ==================== NEW NEWS ROUTES ====================
+
+// Mount new news routes (on /newsfeed to avoid conflict with existing /news/:symbol)
+app.use('/newsfeed', newsRouter);
+
+// Mount image proxy route
+app.use('/img', imgRouter);
 
 // ==================== SERVER STARTUP ====================
 

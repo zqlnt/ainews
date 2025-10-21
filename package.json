@@ -7,7 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/analysisValidator.test.js"
+    "test": "node test/analysisValidator.test.js",
+    "test:news": "node test/newsHelpers.test.js",
+    "test:sentiment": "node test/sentiment.test.js",
+    "test:all": "npm test && npm run test:news && npm run test:sentiment"
   },
   "keywords": [
     "stock",
