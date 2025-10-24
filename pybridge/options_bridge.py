@@ -26,6 +26,9 @@ def main():
         import yfinance as yf
         import pandas as pd
         
+        # Set browser-like headers to avoid bot detection
+        yf.utils.USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        
         ticker = yf.Ticker(symbol)
         
         # Get spot price
