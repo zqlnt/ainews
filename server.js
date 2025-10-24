@@ -1394,15 +1394,20 @@ app.listen(PORT, async () => {
   log('API is ready to accept requests');
   log('');
   
-  // Initialize cache warmer for popular symbols
-  // Testing with User-Agent fix to see if Yahoo Finance allows it now
-  log('🔥 Initializing options cache warmer with User-Agent fix...');
-  initCacheWarmer({
-    immediate: true,    // Start warming cache now (in background)
-    background: true,   // Enable periodic refresh every 2 hours
-    sequential: true    // Fetch one symbol at a time (safer for free tier)
-  }).catch(err => {
-    log(`⚠️  Cache warmer initialization error: ${err.message}`);
-  });
+  // Cache warmer DISABLED: Yahoo Finance blocks datacenter IPs (429 rate limits)
+  // Options data will be fetched on-demand only
+  // To re-enable: Set ENABLE_CACHE_WARMER=true in environment
+  if (process.env.ENABLE_CACHE_WARMER === 'true') {
+    log('🔥 Initializing options cache warmer...');
+    initCacheWarmer({
+      immediate: true,
+      background: true,
+      sequential: true
+    }).catch(err => {
+      log(`⚠️  Cache warmer initialization error: ${err.message}`);
+    });
+  } else {
+    log('ℹ️  Cache warmer disabled (set ENABLE_CACHE_WARMER=true to enable)');
+  }
 });
 

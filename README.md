@@ -337,7 +337,7 @@ Response:
   "status": "success",
   "message": "Claude API is working correctly",
   "response": "API Working"
-}we ar
+}
 ```
 
 ---
@@ -471,13 +471,15 @@ This service includes a **local Python helper** for options analytics using `yfi
 | `FINNHUB_API_KEY` | Yes | Your Finnhub API key |
 | `ALPACA_API_KEY` | Yes | Your Alpaca Markets API key |
 | `ALPACA_SECRET_KEY` | Yes | Your Alpaca Markets secret key |
-| `OPTIONS_PROVIDER` | No | Options data source (default: `yfinance-local`) |
+| `OPTIONS_PROVIDER` | No | Options data source: `polygon` (recommended) or `yfinance-local` (default: `polygon`) |
+| `POLYGON_API_KEY` | Conditional | Required if `OPTIONS_PROVIDER=polygon` |
 | `OPT_MAX_DAYS` | No | Max days for options expiries (default: `30`) |
-| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `2`, max: `5`) |
+| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `5`) - only for yfinance |
 | `OPT_CACHE_TTL_SEC` | No | Fresh cache TTL in seconds (default: `14400` = 4 hours) |
 | `OPT_STALE_TTL_SEC` | No | Stale cache TTL in seconds (default: `86400` = 24 hours) |
-| `PYTHON_BIN` | No | Python binary path (default: `python3`) |
+| `PYTHON_BIN` | No | Python binary path (default: `python3`) - only for yfinance |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
+| `BASE_PUBLIC_URL` | No | Public base URL for absolute URLs (e.g., `https://ainews-ybbv.onrender.com`) |
 
 ### Example Output with Quant
 
