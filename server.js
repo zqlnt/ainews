@@ -14,6 +14,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy to read X-Forwarded-Proto header (Render uses a reverse proxy)
+app.set('trust proxy', true);
+
 // Middleware
 app.use(cors()); // Enable CORS for all origins
 app.use(express.json()); // Parse JSON request bodies

@@ -25,6 +25,30 @@ const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const FRESH_TTL_SEC = 60; // 1 minute fresh
 const STALE_TTL_SEC = 3600; // 1 hour stale
 
+/**
+ * Get the base public URL for building absolute URLs
+ * Priority: BASE_PUBLIC_URL env var > X-Forwarded-Proto header > https fallback
+ * @param {express.Request} req
+ * @returns {string}
+ */
+function getBaseUrl(req) {
+  // 1. Prefer explicit BASE_PUBLIC_URL from environment
+  if (process.env.BASE_PUBLIC_URL) {
+    return process.env.BASE_PUBLIC_URL.replace(/\/$/, ''); // Strip trailing slash
+  }
+  
+  // 2. Use protocol from request (honors X-Forwarded-Proto when trust proxy is enabled)
+  const protocol = req.protocol;
+  const host = req.get('host');
+  
+  // 3. Final fallback: force HTTPS (never HTTP in production)
+  if (protocol === 'http' && !host.includes('localhost')) {
+    return `https://${host}`;
+  }
+  
+  return `${protocol}://${host}`;
+}
+
 // Topic to Finnhub category mapping
 const TOPIC_CATEGORIES = {
   market: 'general',
@@ -237,7 +261,7 @@ router.get('/blocks', async (req, res) => {
     // Include sentiment and minute bucket in cache key for 'all' (stable shuffle)
     const minuteBucket = sentimentFilter === 'all' ? Math.floor(Date.now() / 60000) : 0;
     const cacheKey = `news:blocks:${topic}:${limit}:${sentimentFilter}:${minuteBucket}`;
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const baseUrl = getBaseUrl(req);
     
     let blocks = null;
     let status = 'ok';
@@ -409,7 +433,7 @@ router.get('/:symbol', async (req, res) => {
     const sentimentFilter = validSentiments.includes(sentiment) ? sentiment : 'all';
     
     const cacheKey = `news:symbol:${symbol}:${limit}:${sentimentFilter}`;
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const baseUrl = getBaseUrl(req);
     
     let items = [];
     let status = 'ok';
