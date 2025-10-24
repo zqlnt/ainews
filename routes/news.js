@@ -34,19 +34,29 @@ const STALE_TTL_SEC = 3600; // 1 hour stale
 function getBaseUrl(req) {
   // 1. Prefer explicit BASE_PUBLIC_URL from environment
   if (process.env.BASE_PUBLIC_URL) {
-    return process.env.BASE_PUBLIC_URL.replace(/\/$/, ''); // Strip trailing slash
+    const url = process.env.BASE_PUBLIC_URL.replace(/\/$/, ''); // Strip trailing slash
+    console.log(`[getBaseUrl] Using BASE_PUBLIC_URL: ${url}`);
+    return url;
   }
   
-  // 2. Use protocol from request (honors X-Forwarded-Proto when trust proxy is enabled)
-  const protocol = req.protocol;
+  // 2. Read headers and protocol
+  const protocol = req.protocol; // Honors X-Forwarded-Proto when trust proxy is enabled
   const host = req.get('host');
+  const forwardedProto = req.get('x-forwarded-proto');
   
-  // 3. Final fallback: force HTTPS (never HTTP in production)
-  if (protocol === 'http' && !host.includes('localhost')) {
-    return `https://${host}`;
+  console.log(`[getBaseUrl] req.protocol=${protocol}, host=${host}, x-forwarded-proto=${forwardedProto || '(none)'}`);
+  
+  // 3. Force HTTPS for non-localhost (NEVER use HTTP in production)
+  if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
+    const url = `https://${host}`;
+    console.log(`[getBaseUrl] Forcing HTTPS for production: ${url}`);
+    return url;
   }
   
-  return `${protocol}://${host}`;
+  // 4. Local development fallback
+  const url = `${protocol}://${host}`;
+  console.log(`[getBaseUrl] Local development: ${url}`);
+  return url;
 }
 
 // Topic to Finnhub category mapping
@@ -56,6 +66,45 @@ const TOPIC_CATEGORIES = {
   equities: 'general',
   macro: 'forex'
 };
+
+/**
+ * Safety net: Rewrite any HTTP image URLs to HTTPS before sending response
+ * This ensures we never leak HTTP URLs even if something went wrong
+ * @param {NewsItem} item
+ * @returns {NewsItem}
+ */
+function ensureHttpsImages(item) {
+  if (!item) return item;
+  
+  if (item.image && item.image.startsWith('http://')) {
+    const fixed = item.image.replace('http://', 'https://');
+    console.log(`[ensureHttpsImages] Fixed HTTP → HTTPS: ${item.image.substring(0, 50)}...`);
+    item.image = fixed;
+  }
+  
+  return item;
+}
+
+/**
+ * Safety net: Ensure all images in blocks structure use HTTPS
+ * @param {NewsBlocks} blocks
+ * @returns {NewsBlocks}
+ */
+function ensureHttpsInBlocks(blocks) {
+  if (blocks.hero) {
+    blocks.hero = ensureHttpsImages(blocks.hero);
+  }
+  
+  if (blocks.tiles) {
+    blocks.tiles = blocks.tiles.map(ensureHttpsImages);
+  }
+  
+  if (blocks.latest) {
+    blocks.latest = blocks.latest.map(ensureHttpsImages);
+  }
+  
+  return blocks;
+}
 
 /**
  * @typedef {Object} FinnhubNewsItem
@@ -366,6 +415,9 @@ router.get('/blocks', async (req, res) => {
       };
     }
     
+    // SAFETY NET: Ensure all image URLs use HTTPS before sending response
+    blocks = ensureHttpsInBlocks(blocks);
+    
     // Generate ETag
     const content = JSON.stringify(blocks);
     const etag = generateETag(content);
@@ -500,6 +552,9 @@ router.get('/:symbol', async (req, res) => {
         }
       }
     }
+    
+    // SAFETY NET: Ensure all image URLs use HTTPS before sending response
+    items = items.map(ensureHttpsImages);
     
     const response = {
       symbol,

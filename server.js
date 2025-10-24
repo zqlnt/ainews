@@ -15,7 +15,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Trust proxy to read X-Forwarded-Proto header (Render uses a reverse proxy)
+// MUST be set before any routes or middleware
 app.set('trust proxy', true);
+
+// Log BASE_PUBLIC_URL at startup for diagnostics
+console.log('========================================');
+console.log('🔧 ENVIRONMENT CONFIGURATION');
+console.log('========================================');
+console.log(`BASE_PUBLIC_URL: ${process.env.BASE_PUBLIC_URL || '(not set - will use request headers)'}`);
+console.log(`Trust Proxy: ${app.get('trust proxy')}`);
+console.log(`PORT: ${PORT}`);
+console.log('========================================');
 
 // Middleware
 app.use(cors()); // Enable CORS for all origins
