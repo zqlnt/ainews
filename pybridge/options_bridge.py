@@ -20,16 +20,36 @@ def main():
         
         symbol = sys.argv[1].upper()
         max_days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 5  # Fetch 5 by default
-        num_expiries = min(max(num_expiries, 3), 8)  # Min 3, max 8 expiries
+        num_expiries = int(sys.argv[3]) if len(sys.argv) > 3 else 2  # Fetch 2 by default (reduced load)
+        num_expiries = min(max(num_expiries, 2), 3)  # Min 2, max 3 expiries (reduced to avoid throttling)
         
         import yfinance as yf
         import pandas as pd
+        import time
+        import random
+        import requests
         
-        # Set browser-like headers to avoid bot detection
-        yf.utils.USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        # Create a session with comprehensive browser-like headers to avoid bot detection
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        })
         
-        ticker = yf.Ticker(symbol)
+        # Also set the global user agent as fallback
+        yf.utils.USER_AGENT = session.headers['User-Agent']
+        
+        ticker = yf.Ticker(symbol, session=session)
         
         # Get spot price
         spot = None
@@ -70,7 +90,13 @@ def main():
                             break
                 
                 # Fetch option chains for valid expiries only
-                for expiry_str in valid_expiries:
+                for i, expiry_str in enumerate(valid_expiries):
+                    # Add random delay between requests to avoid triggering rate limits
+                    # Skip delay on first request
+                    if i > 0:
+                        delay = random.uniform(1.0, 3.0)  # 1-3 seconds random delay
+                        time.sleep(delay)
+                    
                     # Parse expiry date
                     expiry_date = pd.to_datetime(expiry_str)
                     expiry_utc = expiry_date.tz_localize('UTC').replace(hour=0, minute=0, second=0)
