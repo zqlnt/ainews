@@ -48,8 +48,11 @@ def main():
         rows = []
         try:
             expiries = ticker.options
+            # DEBUG: Print to stdout so we can see it in Node logs
+            print(f"DEBUG: Found {len(expiries) if expiries else 0} expiries for {symbol}", file=sys.stderr, flush=True)
             if not expiries or len(expiries) == 0:
                 sys.stderr.write(f"WARNING: No expiries available for {symbol}\n")
+                sys.stderr.flush()
             if expiries:
                 # Filter out expired expiries BEFORE fetching chains
                 now = datetime.now(timezone.utc)
