@@ -222,7 +222,11 @@ def main():
         sys.exit(0)
         
     except Exception as e:
-        # Always return valid JSON, even on error
+        # Log error to stderr for debugging, then return valid JSON
+        import traceback
+        sys.stderr.write(f"ERROR: {type(e).__name__}: {str(e)}\n")
+        traceback.print_exc(file=sys.stderr)
+        
         print(json.dumps({
             "spot": None,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
