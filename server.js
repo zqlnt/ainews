@@ -1395,16 +1395,14 @@ app.listen(PORT, async () => {
   log('');
   
   // Initialize cache warmer for popular symbols
-  // TEMPORARILY DISABLED: Yahoo Finance blocks Render datacenter IPs
-  // This ensures quant data is available immediately after server restart
-  log('⚠️  Options cache warmer DISABLED (Yahoo Finance blocking Render IPs)');
-  log('📊 Options data will be fetched on-demand only');
-  // initCacheWarmer({
-  //   immediate: true,    // Start warming cache now (in background)
-  //   background: true,   // Enable periodic refresh every 2 hours
-  //   sequential: true    // Fetch one symbol at a time (safer for free tier)
-  // }).catch(err => {
-  //   log(`⚠️  Cache warmer initialization error: ${err.message}`);
-  // });
+  // Testing with User-Agent fix to see if Yahoo Finance allows it now
+  log('🔥 Initializing options cache warmer with User-Agent fix...');
+  initCacheWarmer({
+    immediate: true,    // Start warming cache now (in background)
+    background: true,   // Enable periodic refresh every 2 hours
+    sequential: true    // Fetch one symbol at a time (safer for free tier)
+  }).catch(err => {
+    log(`⚠️  Cache warmer initialization error: ${err.message}`);
+  });
 });
 
