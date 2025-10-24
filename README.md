@@ -337,7 +337,7 @@ Response:
   "status": "success",
   "message": "Claude API is working correctly",
   "response": "API Working"
-}
+}we ar
 ```
 
 ---
