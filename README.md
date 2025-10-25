@@ -1,20 +1,61 @@
 # AI News Stock Analysis API
 
-A Node.js Express API that provides stock analysis using Claude AI and real-time news from Finnhub. Built for iOS integration and deployed on Render.
+A Node.js Express API that provides stock analysis using Claude AI, real-time news from Finnhub, and professional-grade options data from Polygon.io. Built for iOS integration and deployed on Render.
 
 ## Features
 
 - 🤖 **AI-powered stock analysis** using Claude Sonnet 4
 - 📰 **Real-time stock news** from Finnhub (last 24 hours)
 - 💰 **Live price data** from Alpaca Markets
-- 📊 **Options analytics** with Yahoo Finance (dealer gamma, skew)
+- 📊 **Professional options data** from Polygon.io with Greeks, IV & Open Interest
 - 🔍 **Multiple perspectives**: Bullish, Bearish, and Neutral analysis
 - 🛡️ **Investment advice guardrails** - never recommends buy/sell/hold
-- 🧮 **Quant metrics**: Dealer Gamma (0-30d), Skew (±10% OTM)
+- 🧮 **Advanced quant metrics**: 
+  - Dealer Gamma (0-30d) - Delta-hedging flow impact
+  - Skew (±10% OTM) - Put/call IV differential
+  - ATM IV - At-the-money implied volatility
+  - Put/Call Volume Ratio - Sentiment gauge
+  - Implied Move - Expected price movement
 - 🎯 **Symbol extraction** - automatically detects tickers from queries
 - ✅ **Built-in API key testing** endpoints
 - 🚀 **Production-ready** with proper error handling
 - 🌐 **CORS enabled** for iOS app integration
+
+## What Questions Can Be Answered?
+
+The API can handle various types of stock market questions:
+
+### ✅ Price Movement Analysis
+- "Why did AAPL move today?"
+- "What's driving TSLA's decline?"
+- "Explain NVDA's rally"
+
+### ✅ Options Flow & Sentiment
+- "What's the options sentiment on SPY?"
+- "Is there unusual options activity in TSLA?"
+- "What's the dealer gamma position for NVDA?"
+
+### ✅ Market Structure
+- "What's the implied volatility for AAPL?"
+- "Is there skew in MSFT options?"
+- "What move is the market pricing in for earnings?"
+
+### ✅ Risk Assessment
+- "What's the expected move for AMZN?"
+- "Is put buying elevated in the market?"
+- "What's the volatility environment like?"
+
+### ✅ General Market Questions
+- "What's moving in tech today?"
+- "Summarize the market action"
+- "What are the key risks right now?"
+
+### ❌ NOT Answered (Investment Advice)
+- "Should I buy AAPL?"
+- "What's the best stock to invest in?"
+- "Tell me what to do with my portfolio"
+
+The API provides data-driven analysis but never gives buy/sell/hold recommendations.
 
 ## 🆕 Schema V2 - Structured Analysis Response
 
@@ -35,7 +76,7 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
     "sources": [
       {
         "type": "price|options|news",
-        "provider": "Alpaca|yfinance|Finnhub",
+        "provider": "Alpaca|Polygon.io|Finnhub",
         "timestamp": "2025-10-11T16:43:38.457Z",
         "status": "ok|stale|unavailable",
         "freshness_seconds": 13
@@ -100,11 +141,12 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
 - **Graceful Failure**: If Alpaca fails, continues without price data (no breaking errors)
 - **Fallback**: Uses Yahoo Finance quote if available when Alpaca unavailable
 
-### ✅ Options Chain via Yahoo Finance
-- **Endpoint**: https://query2.finance.yahoo.com/v7/finance/options/{symbol}
-- **Caching**: 3-minute cache per symbol to avoid throttling
-- **Data Parsed**: calls[], puts[] with impliedVolatility, openInterest, volume, strike, expirationDate
-- **Graceful Failure**: Sets `optionsUnavailable: true` on errors, never throws
+### ✅ Options Data via Polygon.io
+- **Endpoint**: https://api.polygon.io/v3/snapshot/options/{symbol}
+- **Caching**: 4-hour fresh cache, 24-hour stale cache
+- **Data Retrieved**: Full options chain with Greeks (delta, gamma, theta, vega), implied volatility, open interest, volume
+- **Reliability**: Professional API designed for datacenter use, no IP blocking issues
+- **Graceful Failure**: Falls back to stale cache if fresh fetch fails, never throws errors
 
 ### ✅ Quant Calculators
 - **Dealer Gamma (0-30d)**:
@@ -143,7 +185,7 @@ A Node.js Express API that provides stock analysis using Claude AI and real-time
 - **Goal**: Ensure quant metrics appear in EVERY response (not just when real-time fetch succeeds)
 - **Strategy**: Stale-while-revalidate pattern
   1. **Fresh Cache (4 hours)**: Return immediately if cached < 4 hours ago
-  2. **Try Fresh Fetch**: Attempt to fetch new data from yfinance
+  2. **Try Fresh Fetch**: Attempt to fetch new data from Polygon.io
   3. **Fallback to Stale (24 hours)**: If fetch fails, serve cached data from last 24 hours
   4. **Show Data Age**: Quant line includes timestamp when using cached data
 - **Example**:
@@ -227,6 +269,8 @@ CLAUDE_API_KEY=your_claude_api_key_here
 FINNHUB_API_KEY=your_finnhub_api_key_here
 ALPACA_API_KEY=your_alpaca_api_key_here
 ALPACA_SECRET_KEY=your_alpaca_secret_key_here
+POLYGON_API_KEY=your_polygon_api_key_here
+OPTIONS_PROVIDER=polygon
 PORT=3000
 ```
 
@@ -417,6 +461,8 @@ CLAUDE_API_KEY=your_claude_api_key_here
 FINNHUB_API_KEY=your_finnhub_api_key_here
 ALPACA_API_KEY=your_alpaca_api_key_here
 ALPACA_SECRET_KEY=your_alpaca_secret_key_here
+POLYGON_API_KEY=your_polygon_api_key_here
+OPTIONS_PROVIDER=polygon
 ```
 
 **Note**: `PORT` is automatically set by Render, no need to add it.
@@ -441,27 +487,29 @@ curl https://your-app.onrender.com/test/all
 curl https://your-app.onrender.com/news/AAPL
 ```
 
-## Local Python Bridge (yfinance)
+## Options Data Provider (Polygon.io)
 
-This service includes a **local Python helper** for options analytics using `yfinance`. It runs in the SAME Render service (no additional services needed).
+This service uses **Polygon.io** for professional-grade options data with full Greeks, implied volatility, and open interest.
 
 ### How It Works
 
-1. **Python Bridge** (`./pybridge/options_bridge.py`):
-   - Fetches options chains from Yahoo Finance via yfinance
-   - Returns spot price, strikes, IV, OI for 0-30d expiries
-   - Outputs clean JSON for Node.js consumption
+1. **Polygon.io API**:
+   - Fetches complete options snapshot with Greeks (delta, gamma, theta, vega)
+   - Returns real-time IV, open interest, volume for all strikes
+   - No IP blocking issues (designed for datacenter use)
 
-2. **Node Wrapper** (`./lib/optionsProvider.js`):
-   - Spawns Python process with 15s timeout
-   - **Smart caching**: Fresh cache (4 hours), stale cache (24 hours)
+2. **Smart Caching**:
+   - **Fresh cache**: 4 hours TTL
+   - **Stale cache**: 24 hours TTL
    - **Stale-while-revalidate**: Serves cached data if fresh fetch fails
-   - Gracefully degrades if Python unavailable
-   - Always shows data age in quant line when using cached data
+   - Always shows data age when using cached data
 
 3. **Quant Calculations**:
    - **Dealer Gamma (0-30d)**: Black-Scholes gamma × S² × 100 × OI, dealer convention (short/long)
    - **Skew (±10% OTM)**: IV difference between 0.9S puts and 1.1S calls
+   - **ATM IV**: At-the-money implied volatility
+   - **Put/Call Ratio**: Volume-based sentiment indicator
+   - **Implied Move**: Expected price movement based on ATM straddle
 
 ### Environment Variables
 
@@ -471,13 +519,11 @@ This service includes a **local Python helper** for options analytics using `yfi
 | `FINNHUB_API_KEY` | Yes | Your Finnhub API key |
 | `ALPACA_API_KEY` | Yes | Your Alpaca Markets API key |
 | `ALPACA_SECRET_KEY` | Yes | Your Alpaca Markets secret key |
-| `OPTIONS_PROVIDER` | No | Options data source: `polygon` (recommended) or `yfinance-local` (default: `polygon`) |
-| `POLYGON_API_KEY` | Conditional | Required if `OPTIONS_PROVIDER=polygon` |
+| `POLYGON_API_KEY` | Yes | Your Polygon.io API key (requires paid tier for options) |
+| `OPTIONS_PROVIDER` | No | Options data source (default: `polygon`) |
 | `OPT_MAX_DAYS` | No | Max days for options expiries (default: `30`) |
-| `OPT_EXPIRIES` | No | Number of expiries to fetch (default: `5`) - only for yfinance |
 | `OPT_CACHE_TTL_SEC` | No | Fresh cache TTL in seconds (default: `14400` = 4 hours) |
 | `OPT_STALE_TTL_SEC` | No | Stale cache TTL in seconds (default: `86400` = 24 hours) |
-| `PYTHON_BIN` | No | Python binary path (default: `python3`) - only for yfinance |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
 | `BASE_PUBLIC_URL` | No | Public base URL for absolute URLs (e.g., `https://ainews-ybbv.onrender.com`) |
 
@@ -486,7 +532,7 @@ This service includes a **local Python helper** for options analytics using `yfi
 ```json
 {
   "success": true,
-  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp; ATM IV: 34.6%@485; Put/Call Vol Ratio: 1.23; Implied Move: $12.80 (2.7%).\n\nBULLISH: Strong demand momentum...\n\nBEARISH: Valuation concerns...\n\nNEUTRAL: Wait for confirmation...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (yfinance local @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
+  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp; ATM IV: 34.6%@485; Put/Call Vol Ratio: 1.23; Implied Move: $12.80 (2.7%).\n\nBULLISH: Strong demand momentum suggests continued upside, with negative dealer gamma potentially amplifying moves higher...\n\nBEARISH: Elevated implied volatility and skew indicate market participants are hedging downside risk despite the rally...\n\nNEUTRAL: Wait for confirmation of sustained demand before committing, as the implied move suggests significant uncertainty...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (Polygon.io @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
 }
 ```
 
