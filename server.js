@@ -1298,6 +1298,34 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
         prompt += `\n- Implied Move (ATM straddle): $${impliedMove.abs} (${impliedMove.pct}%)
   → Market's expected move by next expiry based on option prices. Useful for gauging event risk or earnings expectations.`;
       }
+      
+      // New advanced metrics
+      if (optionsData.maxPain) {
+        prompt += `\n- Max Pain: $${optionsData.maxPain.strike} (${optionsData.maxPain.totalOI.toLocaleString()} OI)
+  → Strike where most option value expires worthless. Market makers may influence price toward this level near expiry.`;
+      }
+      if (optionsData.putCallOIRatio) {
+        const oiSentiment = optionsData.putCallOIRatio.ratio > 1.2 ? 'bearish positioning' : optionsData.putCallOIRatio.ratio < 0.8 ? 'bullish positioning' : 'neutral positioning';
+        prompt += `\n- Put/Call OI Ratio: ${optionsData.putCallOIRatio.ratio} (${oiSentiment})
+  → Open interest ratio shows net positioning vs volume ratio (which shows daily flow). Higher OI = more hedging/bearish bets locked in.`;
+      }
+      if (optionsData.totalDelta) {
+        prompt += `\n- Total Delta: ${optionsData.totalDelta.formatted} (${optionsData.totalDelta.bias})
+  → Net directional exposure across all options. Positive = net bullish positioning, negative = net bearish positioning.`;
+      }
+      if (optionsData.gammaWalls && optionsData.gammaWalls.length > 0) {
+        const walls = optionsData.gammaWalls.map(w => w.formatted).join(', ');
+        prompt += `\n- Gamma Walls: ${walls}
+  → Strikes with concentrated gamma act as support/resistance. Price tends to pin near these levels as dealers hedge.`;
+      }
+      if (optionsData.ivTermStructure) {
+        prompt += `\n- IV Term Structure: Front ${optionsData.ivTermStructure.front}% / Back ${optionsData.ivTermStructure.back}% (${optionsData.ivTermStructure.structure})
+  → ${optionsData.ivTermStructure.structure === 'backwardation' ? 'Near-term fear/event risk priced higher than long-term' : 'Normal curve - volatility expected to mean revert'}.`;
+      }
+      if (optionsData.zeroGammaLevel) {
+        prompt += `\n- Zero Gamma Level: ${optionsData.zeroGammaLevel.formatted}
+  → Critical level where net gamma = 0. ${optionsData.zeroGammaLevel.aboveSpot ? 'Above spot = volatility dampens above this level, amplifies below' : 'Below spot = volatility amplifies above this level, dampens below'}.`;
+      }
     }
 
     // Task 6: Strict output formatting instructions
@@ -1308,6 +1336,12 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     if (atmIV) quantParts.push('ATM IV: X.X%@strike');
     if (putCallRatio) quantParts.push('Put/Call Vol Ratio: X.XX');
     if (impliedMove) quantParts.push('Implied Move: $X.XX (X.X%)');
+    if (optionsData.maxPain) quantParts.push('Max Pain: $XXX');
+    if (optionsData.putCallOIRatio) quantParts.push('Put/Call OI Ratio: X.XX');
+    if (optionsData.totalDelta) quantParts.push('Total Delta: +/-$XXM');
+    if (optionsData.gammaWalls && optionsData.gammaWalls.length > 0) quantParts.push('Gamma Walls: $XXX (+/-$XB)');
+    if (optionsData.ivTermStructure) quantParts.push('IV Term: Front XX% / Back XX%');
+    if (optionsData.zeroGammaLevel) quantParts.push('Zero Gamma: $XXX');
     
     const hasQuant = quantParts.length > 0;
     const cacheNote = isStaleData && dataAge > 0 ? ` (cached ${dataAge} min ago)` : '';
