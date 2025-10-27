@@ -1,15 +1,15 @@
+import dotenv from 'dotenv';
+// Load environment variables FIRST before any other imports
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 import { initCacheWarmer } from './lib/cacheWarmer.js';
 import { validateAnalysisV2, parseFromLegacyText, buildLegacyText } from './lib/analysisValidator.js';
 import newsRouter from './routes/news.js';
 import imgRouter from './routes/img.js';
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
