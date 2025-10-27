@@ -1326,6 +1326,21 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
         prompt += `\n- Zero Gamma Level: ${optionsData.zeroGammaLevel.formatted}
   → Critical level where net gamma = 0. ${optionsData.zeroGammaLevel.aboveSpot ? 'Above spot = volatility dampens above this level, amplifies below' : 'Below spot = volatility amplifies above this level, dampens below'}.`;
       }
+      if (optionsData.multipleExpectedMoves && optionsData.multipleExpectedMoves.length > 0) {
+        prompt += `\n- Expected Moves:`;
+        for (const move of optionsData.multipleExpectedMoves) {
+          prompt += `\n  • ${move.days}d (${move.expiry}): ±$${move.move} (±${move.movePercent}%) = $${move.lower}-${move.upper}`;
+        }
+        prompt += `\n  → Market-implied price ranges based on straddle pricing at multiple expirations. Use for entry/exit planning.`;
+      }
+      if (optionsData.totalVega) {
+        prompt += `\n- Total Vega: ${optionsData.totalVega.formatted} (${optionsData.totalVega.bias})
+  → Portfolio sensitivity to 1% IV move. ${optionsData.totalVega.bias === 'long volatility' ? 'Gains if IV rises (VIX spike helps)' : optionsData.totalVega.bias === 'short volatility' ? 'Loses if IV rises (benefits from calm markets)' : 'Neutral to IV changes'}.`;
+      }
+      if (optionsData.vanna) {
+        prompt += `\n- Vanna: ${optionsData.vanna.formatted}
+  → ${optionsData.vanna.interpretation}. Cross-Greek showing how delta changes with IV. Important during volatility events.`;
+      }
     }
 
     // Task 6: Strict output formatting instructions
@@ -1342,6 +1357,9 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     if (optionsData.gammaWalls && optionsData.gammaWalls.length > 0) quantParts.push('Gamma Walls: $XXX (+/-$XB)');
     if (optionsData.ivTermStructure) quantParts.push('IV Term: Front XX% / Back XX%');
     if (optionsData.zeroGammaLevel) quantParts.push('Zero Gamma: $XXX');
+    if (optionsData.multipleExpectedMoves && optionsData.multipleExpectedMoves.length > 0) quantParts.push('Expected Moves: XXd ±$XX (±X%)');
+    if (optionsData.totalVega) quantParts.push('Total Vega: +/-$XXM/1%');
+    if (optionsData.vanna) quantParts.push('Vanna: +/-$XXM');
     
     const hasQuant = quantParts.length > 0;
     const cacheNote = isStaleData && dataAge > 0 ? ` (cached ${dataAge} min ago)` : '';
