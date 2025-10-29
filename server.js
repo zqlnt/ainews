@@ -1387,7 +1387,7 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     // Format data timestamp for display (when the data is from, not when it was fetched)
     // Minimal format: "28 Oct 9PM" (UK time)
     let dataTimestampNote = '';
-    if (optionsData.dataTimestamp) {
+    if (optionsData && optionsData.dataTimestamp) {
       try {
         const dataDate = new Date(optionsData.dataTimestamp);
         // Format as compact UK time: "28 Oct 9PM" (skip minutes if :00)
@@ -1402,12 +1402,13 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
         dataTimestampNote = ` [${formatted}]`;
       } catch (e) {
         // If timestamp parsing fails, skip it
+        log(`⚠️  Failed to format dataTimestamp: ${e.message}`);
         dataTimestampNote = '';
       }
     }
     
     const quantInstruction = hasQuant 
-      ? ` After your intro paragraph, add two newlines (\\n\\n) then start: "Quant Metrics${cacheNote}: ${quantParts.join('; ')}${dataTimestampNote}"`
+      ? ` After your intro paragraph, add two newlines (\\n\\n) then start EXACTLY with: "Quant Metrics${cacheNote}: ${quantParts.join('; ')}${dataTimestampNote}"\n\nIMPORTANT: You MUST include the timestamp ${dataTimestampNote ? `"${dataTimestampNote}"` : ''} at the very end of the Quant Metrics line if provided.`
       : '';
     
     const optionsNote = !hasQuant && hasOptionsData === false
