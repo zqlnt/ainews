@@ -1383,8 +1383,31 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     
     const hasQuant = quantParts.length > 0;
     const cacheNote = isStaleData && dataAge > 0 ? ` (cached ${dataAge} min ago)` : '';
+    
+    // Format data timestamp for display (when the data is from, not when it was fetched)
+    let dataTimestampNote = '';
+    if (optionsData.dataTimestamp) {
+      try {
+        const dataDate = new Date(optionsData.dataTimestamp);
+        // Format as: "Dec 29, 4:00 PM ET"
+        // Polygon timestamps are typically in milliseconds UTC, format to ET
+        const formatted = dataDate.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+          timeZone: 'America/New_York'
+        });
+        dataTimestampNote = ` [data from ${formatted} ET]`;
+      } catch (e) {
+        // If timestamp parsing fails, skip it
+        dataTimestampNote = '';
+      }
+    }
+    
     const quantInstruction = hasQuant 
-      ? ` After your intro paragraph, add two newlines (\\n\\n) then start: "Quant Metrics${cacheNote}: ${quantParts.join('; ')}"`
+      ? ` After your intro paragraph, add two newlines (\\n\\n) then start: "Quant Metrics${cacheNote}${dataTimestampNote}: ${quantParts.join('; ')}"`
       : '';
     
     const optionsNote = !hasQuant && hasOptionsData === false
