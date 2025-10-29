@@ -1399,7 +1399,14 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
           hour12: true,
           timeZone: 'Europe/London'
         }).replace(',', ''); // Remove comma
-        dataTimestampNote = ` [${formatted}]`;
+        
+        // Get timezone abbreviation (GMT or BST)
+        const timeZoneAbbr = dataDate.toLocaleString('en-GB', {
+          timeZone: 'Europe/London',
+          timeZoneName: 'short'
+        }).split(' ').pop() || 'GMT';
+        
+        dataTimestampNote = ` [${formatted} ${timeZoneAbbr}]`;
       } catch (e) {
         // If timestamp parsing fails, skip it
         log(`⚠️  Failed to format dataTimestamp: ${e.message}`);
