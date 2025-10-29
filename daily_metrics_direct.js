@@ -26,10 +26,11 @@ const DEFAULT_TICKERS = [
 ];
 
 /**
- * Fetch options data from Polygon.io
+ * Fetch options data and spot price from Polygon.io
  */
 async function fetchPolygonData(ticker) {
   try {
+    // Get options snapshot
     const url = `https://api.polygon.io/v3/snapshot/options/${ticker}?limit=250&apiKey=${POLYGON_API_KEY}`;
     const response = await fetch(url);
     
@@ -38,7 +39,19 @@ async function fetchPolygonData(ticker) {
     }
     
     const data = await response.json();
-    return data.results || [];
+    const contracts = data.results || [];
+    
+    // Get spot price from underlying ticker snapshot
+    const spotUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${POLYGON_API_KEY}`;
+    const spotResponse = await fetch(spotUrl);
+    
+    let spotPrice = null;
+    if (spotResponse.ok) {
+      const spotData = await spotResponse.json();
+      spotPrice = spotData.ticker?.day?.c || spotData.ticker?.prevDay?.c || null;
+    }
+    
+    return { contracts, spotPrice };
   } catch (error) {
     console.error(`❌ ${ticker}: Failed to fetch Polygon data - ${error.message}`);
     return null;
@@ -127,17 +140,22 @@ async function logTicker(ticker) {
   try {
     console.log(`📊 Logging ${ticker}...`);
     
-    // Fetch options data
-    const contracts = await fetchPolygonData(ticker);
-    if (!contracts) {
+    // Fetch options data and spot price
+    const data = await fetchPolygonData(ticker);
+    if (!data) {
       console.log(`⚠️  ${ticker}: No data available`);
       return false;
     }
     
-    // Get spot price from first contract
-    const spotPrice = contracts[0]?.underlying_asset?.price || null;
+    const { contracts, spotPrice } = data;
+    
     if (!spotPrice) {
       console.log(`⚠️  ${ticker}: No spot price available`);
+      return false;
+    }
+    
+    if (!contracts || contracts.length === 0) {
+      console.log(`⚠️  ${ticker}: No options contracts available`);
       return false;
     }
     
@@ -151,7 +169,7 @@ async function logTicker(ticker) {
     // Write to Supabase
     await writeToSupabase(ticker, metrics);
     
-    console.log(`✅ ${ticker}: Logged (spot: $${spotPrice.toFixed(2)})`);
+    console.log(`✅ ${ticker}: Logged (spot: $${spotPrice.toFixed(2)}, ${contracts.length} contracts)`);
     return true;
   } catch (error) {
     console.error(`❌ ${ticker}: ${error.message}`);
