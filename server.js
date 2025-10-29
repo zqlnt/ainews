@@ -1572,17 +1572,17 @@ Now provide your analysis:`;
           gamma,
           skew,
           atmIV,
-          putCallVolRatio,
+          putCallVolRatio: putCallRatio,
           impliedMove,
           maxPain,
-          putCallOIRatio,
-          totalDelta,
-          gammaWalls,
+          putCallOIRatio: optionsData.putCallOIRatio,
+          totalDelta: optionsData.totalDelta,
+          gammaWalls: optionsData.gammaWalls,
           ivTerm,
-          zeroGammaLevel,
-          multipleExpectedMoves,
-          totalVega,
-          vanna
+          zeroGammaLevel: optionsData.zeroGammaLevel,
+          multipleExpectedMoves: optionsData.multipleExpectedMoves,
+          totalVega: optionsData.totalVega,
+          vanna: optionsData.vanna
         });
       } catch (metricsError) {
         log(`⚠️  /analyze - Failed to log metrics: ${metricsError.message}`);
