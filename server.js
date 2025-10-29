@@ -1385,21 +1385,21 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     const cacheNote = isStaleData && dataAge > 0 ? ` (cached ${dataAge} min ago)` : '';
     
     // Format data timestamp for display (when the data is from, not when it was fetched)
+    // Minimal format: "28 Oct 9PM" (UK time)
     let dataTimestampNote = '';
     if (optionsData.dataTimestamp) {
       try {
         const dataDate = new Date(optionsData.dataTimestamp);
-        // Format as: "Dec 29, 4:00 PM ET"
-        // Polygon timestamps are typically in milliseconds UTC, format to ET
-        const formatted = dataDate.toLocaleString('en-US', {
-          month: 'short',
+        // Format as compact UK time: "28 Oct 9PM" (skip minutes if :00)
+        const formatted = dataDate.toLocaleString('en-GB', {
           day: 'numeric',
+          month: 'short',
           hour: 'numeric',
-          minute: '2-digit',
+          minute: dataDate.getMinutes() === 0 ? undefined : '2-digit',
           hour12: true,
-          timeZone: 'America/New_York'
-        });
-        dataTimestampNote = ` [data from ${formatted} ET]`;
+          timeZone: 'Europe/London'
+        }).replace(',', ''); // Remove comma
+        dataTimestampNote = ` [${formatted}]`;
       } catch (e) {
         // If timestamp parsing fails, skip it
         dataTimestampNote = '';
