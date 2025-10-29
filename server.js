@@ -1407,7 +1407,7 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
     }
     
     const quantInstruction = hasQuant 
-      ? ` After your intro paragraph, add two newlines (\\n\\n) then start: "Quant Metrics${cacheNote}${dataTimestampNote}: ${quantParts.join('; ')}"`
+      ? ` After your intro paragraph, add two newlines (\\n\\n) then start: "Quant Metrics${cacheNote}: ${quantParts.join('; ')}${dataTimestampNote}"`
       : '';
     
     const optionsNote = !hasQuant && hasOptionsData === false
