@@ -922,11 +922,18 @@ app.post('/analyze', async (req, res) => {
     log(`📊 /analyze - Processing query: "${sanitizedQuery}"${conversation_id ? ` [conv: ${conversation_id.substring(0, 8)}]` : ''}`);
 
     // Load conversation context if provided
+    // Non-blocking: errors won't break the request
     let conversationContext = null;
     if (conversation_id && isConversationMemoryEnabled()) {
-      conversationContext = await getConversation(conversation_id);
-      if (conversationContext.ticker) {
-        log(`💭 /analyze - Conversation context: last ticker was ${conversationContext.ticker}`);
+      try {
+        conversationContext = await getConversation(conversation_id);
+        if (conversationContext.ticker) {
+          log(`💭 /analyze - Conversation context: last ticker was ${conversationContext.ticker}`);
+        }
+      } catch (convError) {
+        log(`⚠️  /analyze - Failed to load conversation: ${convError.message}`);
+        // Continue without context
+        conversationContext = null;
       }
     }
 
@@ -1539,36 +1546,48 @@ Now provide your analysis:`;
     log('✅ /analyze - Analysis completed successfully');
 
     // Save conversation memory (if enabled and conversation_id provided)
+    // Non-blocking: errors won't break the response
     if (conversation_id && isConversationMemoryEnabled() && symbol) {
-      const messages = conversationContext?.messages || [];
-      messages.push({ role: 'user', content: sanitizedQuery });
-      messages.push({ role: 'assistant', content: legacyAnalysis });
-      
-      await saveConversation(conversation_id, symbol, messages);
-      log(`💭 /analyze - Saved conversation ${conversation_id.substring(0, 8)} with ticker ${symbol}`);
+      try {
+        const messages = conversationContext?.messages || [];
+        messages.push({ role: 'user', content: sanitizedQuery });
+        messages.push({ role: 'assistant', content: legacyAnalysis });
+        
+        await saveConversation(conversation_id, symbol, messages);
+        log(`💭 /analyze - Saved conversation ${conversation_id.substring(0, 8)} with ticker ${symbol}`);
+      } catch (convError) {
+        log(`⚠️  /analyze - Failed to save conversation: ${convError.message}`);
+        // Continue anyway - don't break the response
+      }
     }
     
     // Log metrics snapshot (if enabled and we have valid data)
+    // Non-blocking: errors won't break the response
     if (isMetricsLoggingEnabled() && symbol && !gamma.unavailable) {
-      await logMetricsSnapshot({
-        ticker: symbol,
-        priceData,
-        optionsData,
-        gamma,
-        skew,
-        atmIV,
-        putCallVolRatio,
-        impliedMove,
-        maxPain,
-        putCallOIRatio,
-        totalDelta,
-        gammaWalls,
-        ivTerm,
-        zeroGammaLevel,
-        multipleExpectedMoves,
-        totalVega,
-        vanna
-      });
+      try {
+        await logMetricsSnapshot({
+          ticker: symbol,
+          priceData,
+          optionsData,
+          gamma,
+          skew,
+          atmIV,
+          putCallVolRatio,
+          impliedMove,
+          maxPain,
+          putCallOIRatio,
+          totalDelta,
+          gammaWalls,
+          ivTerm,
+          zeroGammaLevel,
+          multipleExpectedMoves,
+          totalVega,
+          vanna
+        });
+      } catch (metricsError) {
+        log(`⚠️  /analyze - Failed to log metrics: ${metricsError.message}`);
+        // Continue anyway - don't break the response
+      }
     }
     
     // Return response with both schemas
