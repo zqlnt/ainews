@@ -1132,8 +1132,7 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
     const evidence = formatNewsEvidence(newsText);
     log(`📋 /analyze - Formatted ${evidence.length} evidence points`);
 
-    // Track data source timestamps (for both legacy footer and v2 sources)
-    const dataSources = []; // Legacy format: { source, type, timestamp }
+    // Track data source timestamps for v2 sources
     const sourcesV2 = []; // V2 format: { type, provider, timestamp, status, freshness_seconds }
 
     // Task 2: Fetch live price data from Alpaca if symbol found
@@ -1144,11 +1143,6 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
       priceData = await fetchAlpacaPrice(symbol);
       spotPrice = priceData?.currentPrice;
       if (priceData) {
-        dataSources.push({
-          source: 'Alpaca',
-          type: 'price',
-          timestamp: priceTimestamp
-        });
         sourcesV2.push({
           type: 'price',
           provider: 'Alpaca',
@@ -1169,11 +1163,6 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
       
       if (hasOptionsData) {
         const optionsTimestamp = new Date(optionsData.fetchedAt);
-        dataSources.push({
-          source: 'Options (Polygon.io)',
-          type: 'options',
-          timestamp: optionsTimestamp
-        });
         sourcesV2.push({
           type: 'options',
           provider: 'Polygon.io',
@@ -1201,11 +1190,6 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
 
     // Track news source timestamp (news was provided by client)
     if (newsText && newsText.trim().length > 0) {
-      dataSources.push({
-        source: 'Finnhub',
-        type: 'news',
-        timestamp: new Date()
-      });
       sourcesV2.push({
         type: 'news',
         provider: 'Finnhub',
@@ -1514,7 +1498,7 @@ Now provide your analysis:`;
     });
 
     // Build legacy analysis text
-    const legacyAnalysis = buildLegacyText(analysisV2, dataSources);
+    const legacyAnalysis = buildLegacyText(analysisV2);
 
     // Single-line logging of data pipeline
     const priceSource = priceData ? 'Alpaca' : (optionsData.spot ? 'Polygon.io' : 'none');
