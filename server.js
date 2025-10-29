@@ -8,6 +8,20 @@ import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 import { initCacheWarmer } from './lib/cacheWarmer.js';
 import { validateAnalysisV2, parseFromLegacyText, buildLegacyText } from './lib/analysisValidator.js';
+import { 
+  isConversationMemoryEnabled, 
+  getConversation, 
+  saveConversation, 
+  resolveTickerWithContext,
+  cleanupOldConversations,
+  getConversationStats
+} from './lib/conversationStore.js';
+import {
+  isMetricsLoggingEnabled,
+  logMetricsSnapshot,
+  getMetricsHistory,
+  getMetricsStats
+} from './lib/metricsLogger.js';
 import newsRouter from './routes/news.js';
 import imgRouter from './routes/img.js';
 
@@ -881,7 +895,7 @@ app.get('/', (req, res) => {
 // POST /analyze - Claude AI stock analysis (with structured v2 output)
 app.post('/analyze', async (req, res) => {
   try {
-    const { query, news } = req.body;
+    const { query, news, conversation_id } = req.body;
 
     // Validate input - query is required, news can be empty
     if (!query) {
@@ -905,7 +919,16 @@ app.post('/analyze', async (req, res) => {
       });
     }
 
-    log(`📊 /analyze - Processing query: "${sanitizedQuery}"`);
+    log(`📊 /analyze - Processing query: "${sanitizedQuery}"${conversation_id ? ` [conv: ${conversation_id.substring(0, 8)}]` : ''}`);
+
+    // Load conversation context if provided
+    let conversationContext = null;
+    if (conversation_id && isConversationMemoryEnabled()) {
+      conversationContext = await getConversation(conversation_id);
+      if (conversationContext.ticker) {
+        log(`💭 /analyze - Conversation context: last ticker was ${conversationContext.ticker}`);
+      }
+    }
 
     // PRIORITY 1: Block jailbreak attempts immediately
     if (containsJailbreakAttempt(sanitizedQuery)) {
@@ -993,8 +1016,14 @@ What would you like to know?`;
       });
     }
 
-    // PRIORITY 4: Extract ticker symbol
-    const symbol = extractSymbol(sanitizedQuery);
+    // PRIORITY 4: Extract ticker symbol (with conversation context)
+    let symbol = extractSymbol(sanitizedQuery);
+    
+    // If no ticker in query but we have conversation context, use context ticker
+    if (!symbol && conversationContext?.ticker) {
+      symbol = conversationContext.ticker;
+      log(`💭 /analyze - Using ticker from context: ${symbol}`);
+    }
 
     // PRIORITY 5: Metric request without ticker
     if (!symbol && isMetricRequest(sanitizedQuery)) {
@@ -1509,6 +1538,39 @@ Now provide your analysis:`;
     
     log('✅ /analyze - Analysis completed successfully');
 
+    // Save conversation memory (if enabled and conversation_id provided)
+    if (conversation_id && isConversationMemoryEnabled() && symbol) {
+      const messages = conversationContext?.messages || [];
+      messages.push({ role: 'user', content: sanitizedQuery });
+      messages.push({ role: 'assistant', content: legacyAnalysis });
+      
+      await saveConversation(conversation_id, symbol, messages);
+      log(`💭 /analyze - Saved conversation ${conversation_id.substring(0, 8)} with ticker ${symbol}`);
+    }
+    
+    // Log metrics snapshot (if enabled and we have valid data)
+    if (isMetricsLoggingEnabled() && symbol && !gamma.unavailable) {
+      await logMetricsSnapshot({
+        ticker: symbol,
+        priceData,
+        optionsData,
+        gamma,
+        skew,
+        atmIV,
+        putCallVolRatio,
+        impliedMove,
+        maxPain,
+        putCallOIRatio,
+        totalDelta,
+        gammaWalls,
+        ivTerm,
+        zeroGammaLevel,
+        multipleExpectedMoves,
+        totalVega,
+        vanna
+      });
+    }
+    
     // Return response with both schemas
     res.json({
       success: true,
@@ -1788,6 +1850,76 @@ app.use('/newsfeed', newsRouter);
 // Mount image proxy route
 app.use('/img', imgRouter);
 
+// ==================== CONVERSATION & METRICS ENDPOINTS ====================
+
+// GET /stats/conversations - Get conversation stats
+app.get('/stats/conversations', async (req, res) => {
+  try {
+    if (!isConversationMemoryEnabled()) {
+      return res.json({
+        enabled: false,
+        message: 'Conversation memory not enabled'
+      });
+    }
+    
+    const stats = await getConversationStats();
+    res.json({
+      enabled: true,
+      ...stats
+    });
+  } catch (error) {
+    log(`❌ /stats/conversations - Error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /stats/metrics - Get metrics logging stats  
+app.get('/stats/metrics', async (req, res) => {
+  try {
+    if (!isMetricsLoggingEnabled()) {
+      return res.json({
+        enabled: false,
+        message: 'Metrics logging not enabled'
+      });
+    }
+    
+    const stats = await getMetricsStats();
+    res.json({
+      enabled: true,
+      ...stats
+    });
+  } catch (error) {
+    log(`❌ /stats/metrics - Error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /history/:ticker?days=30 - Get historical metrics for a ticker
+app.get('/history/:ticker', async (req, res) => {
+  try {
+    if (!isMetricsLoggingEnabled()) {
+      return res.json({
+        enabled: false,
+        message: 'Metrics logging not enabled'
+      });
+    }
+    
+    const { ticker } = req.params;
+    const days = parseInt(req.query.days) || 30;
+    
+    const history = await getMetricsHistory(ticker, days);
+    res.json({
+      ticker: ticker.toUpperCase(),
+      days_requested: days,
+      snapshots: history.length,
+      data: history
+    });
+  } catch (error) {
+    log(`❌ /history/${req.params.ticker} - Error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== SERVER STARTUP ====================
 
 // Start server and test API keys on startup
@@ -1832,5 +1964,29 @@ app.listen(PORT, async () => {
   } else {
     log('ℹ️  Cache warmer disabled (set ENABLE_CACHE_WARMER=true to enable)');
   }
+  
+  log('');
+  
+  // Log Supabase feature status
+  if (isConversationMemoryEnabled()) {
+    log('✅ Conversation Memory: Enabled (Supabase)');
+    // Run cleanup job every hour
+    setInterval(async () => {
+      const deleted = await cleanupOldConversations();
+      if (deleted > 0) {
+        log(`🧹 Cleaned up ${deleted} old conversations`);
+      }
+    }, 60 * 60 * 1000); // 1 hour
+  } else {
+    log('ℹ️  Conversation Memory: Disabled (set SUPABASE_URL and SUPABASE_ANON_KEY)');
+  }
+  
+  if (isMetricsLoggingEnabled()) {
+    log('✅ Metrics Logging: Enabled (Supabase)');
+  } else {
+    log('ℹ️  Metrics Logging: Disabled (set SUPABASE_URL and SUPABASE_ANON_KEY)');
+  }
+  
+  log('');
 });
 
