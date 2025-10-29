@@ -1,0 +1,35 @@
+name: Daily Metrics Logger
+
+# Run every weekday at 10 AM ET (2 PM UTC)
+# Markets open at 9:30 AM ET, so 10 AM ensures data is available
+on:
+  schedule:
+    - cron: '0 14 * * 1-5'  # 2 PM UTC = 10 AM ET (weekdays only)
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  log-metrics:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm install node-fetch
+      
+      - name: Run daily metrics logger
+        run: node daily_metrics_logger.js
+        env:
+          API_URL: https://ainews-ybbv.onrender.com
+      
+      - name: Check metrics stats
+        run: |
+          echo "Checking final metrics stats..."
+          curl -s https://ainews-ybbv.onrender.com/stats/metrics | jq '.'
+
