@@ -21,12 +21,14 @@ jobs:
           node-version: '20'
       
       - name: Install dependencies
-        run: npm install node-fetch
+        run: npm install @supabase/supabase-js node-fetch
       
-      - name: Run daily metrics logger
-        run: node daily_metrics_logger.js
+      - name: Run direct metrics logger (bypasses API)
+        run: node daily_metrics_direct.js
         env:
-          API_URL: https://ainews-ybbv.onrender.com
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
       
       - name: Check metrics stats
         run: |
