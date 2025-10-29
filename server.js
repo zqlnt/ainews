@@ -1939,6 +1939,56 @@ app.get('/history/:ticker', async (req, res) => {
   }
 });
 
+// GET /test/metrics-logging - Test metrics logging with detailed error output
+app.get('/test/metrics-logging', async (req, res) => {
+  try {
+    log('🧪 /test/metrics-logging - Testing metrics logging');
+    
+    if (!isMetricsLoggingEnabled()) {
+      return res.json({
+        enabled: false,
+        message: 'Metrics logging not enabled - check SUPABASE_URL and SUPABASE_ANON_KEY'
+      });
+    }
+    
+    // Try to log a test metric
+    const testData = {
+      ticker: 'TEST',
+      priceData: { currentPrice: 100, change: 1, changePercent: 1 },
+      optionsData: { spot: 100, fetchedAt: new Date().toISOString(), isStale: false },
+      gamma: { unavailable: false, gammaNotional: 1000000000, interpretation: 'short' },
+      skew: { unavailable: false, skewPP: 5.5 },
+      atmIV: { unavailable: false, iv: 30, strike: 100 },
+      putCallVolRatio: { unavailable: false, ratio: 0.8 },
+      impliedMove: { unavailable: false, moveDollars: 5, movePct: 5 },
+      maxPain: { unavailable: false, strike: 95 },
+      putCallOIRatio: { unavailable: false, ratio: 1.2 },
+      totalDelta: { unavailable: false, notional: 5000000 },
+      gammaWalls: { unavailable: false, walls: [{strike: 100, gammaNotional: 1000000}] },
+      ivTerm: { unavailable: false, frontIV: 35, backIV: 25 },
+      zeroGammaLevel: { unavailable: false, level: 90 },
+      multipleExpectedMoves: { unavailable: false, moves: [{dte: 7, moveDollars: 5, movePct: 5}] },
+      totalVega: { unavailable: false, notional: 1000000 },
+      vanna: { unavailable: false, notional: 500000 }
+    };
+    
+    const result = await logMetricsSnapshot(testData);
+    
+    res.json({
+      enabled: true,
+      test_result: result,
+      message: result ? 'Test metrics logged successfully' : 'Failed to log test metrics (check server logs)'
+    });
+  } catch (error) {
+    log(`❌ /test/metrics-logging - Error: ${error.message}`);
+    log(`Stack: ${error.stack}`);
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // ==================== SERVER STARTUP ====================
 
 // Start server and test API keys on startup
