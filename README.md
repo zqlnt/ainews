@@ -12,12 +12,7 @@ A Node.js Express API that provides stock analysis using Claude AI, real-time ne
 - 📊 **Professional options data** from Polygon.io with Greeks, IV & Open Interest
 - 🔍 **Multiple perspectives**: Bullish, Bearish, and Neutral analysis
 - 🛡️ **Investment advice guardrails** - never recommends buy/sell/hold
-- 🧮 **Advanced quant metrics**: 
-  - Dealer Gamma (0-30d) - Delta-hedging flow impact
-  - Skew (±10% OTM) - Put/call IV differential
-  - ATM IV - At-the-money implied volatility
-  - Put/Call Volume Ratio - Sentiment gauge
-  - Implied Move - Expected price movement
+- 🧮 **14 Advanced quant metrics**: Dealer Gamma, Skew, ATM IV, Put/Call Ratios, Implied Moves, Max Pain, Gamma Walls, IV Term Structure, Zero Gamma Level, Total Delta/Vega, Vanna, and more
 - 🎯 **Symbol extraction** - automatically detects tickers from queries
 - ✅ **Built-in API key testing** endpoints
 - 🚀 **Production-ready** with proper error handling
@@ -274,6 +269,10 @@ ALPACA_SECRET_KEY=your_alpaca_secret_key_here
 POLYGON_API_KEY=your_polygon_api_key_here
 OPTIONS_PROVIDER=polygon
 PORT=3000
+
+# Optional: Conversation Memory & Metrics Logging (Supabase)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_supabase_anon_key_here
 ```
 
 ### 3. Run Locally
@@ -312,9 +311,12 @@ Request body:
 ```json
 {
   "query": "Why is TSLA down?",
-  "news": "Tesla shares fall 5% after Q3 earnings miss... Elon Musk announces new factory delays..."
+  "news": "Tesla shares fall 5% after Q3 earnings miss... Elon Musk announces new factory delays...",
+  "conversation_id": "optional-uuid-for-conversation-memory"
 }
 ```
+
+**Note**: `conversation_id` is optional. If provided, enables conversation memory for follow-up questions.
 
 ```bash
 curl -X POST http://localhost:3000/analyze \
@@ -429,6 +431,109 @@ Response:
 }
 ```
 
+---
+
+### Test Options Provider
+**GET /test/options** - Check which options data provider is configured
+
+```bash
+curl http://localhost:3000/test/options
+```
+
+Response:
+```json
+{
+  "provider": "polygon"
+}
+```
+
+---
+
+### Test Metrics Logging
+**GET /test/metrics-logging** - Test metrics logging functionality (Supabase)
+
+```bash
+curl http://localhost:3000/test/metrics-logging
+```
+
+Response:
+```json
+{
+  "enabled": true,
+  "test_result": true,
+  "message": "Test metrics logged successfully"
+}
+```
+
+---
+
+### Conversation Memory Stats
+**GET /stats/conversations** - Get conversation memory statistics
+
+```bash
+curl http://localhost:3000/stats/conversations
+```
+
+Response:
+```json
+{
+  "enabled": true,
+  "total": 42,
+  "active": 12
+}
+```
+
+---
+
+### Metrics Logging Stats
+**GET /stats/metrics** - Get historical metrics logging statistics
+
+```bash
+curl http://localhost:3000/stats/metrics
+```
+
+Response:
+```json
+{
+  "enabled": true,
+  "total_snapshots": 150,
+  "unique_tickers": 25,
+  "date_range": {
+    "start": "2025-10-15",
+    "end": "2025-10-29"
+  }
+}
+```
+
+---
+
+### Historical Metrics
+**GET /history/:ticker?days=30** - Get historical metrics snapshots for a ticker
+
+```bash
+curl http://localhost:3000/history/AAPL?days=30
+```
+
+Response:
+```json
+{
+  "ticker": "AAPL",
+  "days_requested": 30,
+  "snapshots": 15,
+  "data": [
+    {
+      "date": "2025-10-29",
+      "dealer_gamma_value": -1.2,
+      "dealer_gamma_direction": "short",
+      "skew_pp": 5.4,
+      "atm_iv": 34.6,
+      "put_call_vol_ratio": 1.23,
+      ...
+    }
+  ]
+}
+```
+
 ## Deploy to Render
 
 ### Step 1: Push to GitHub
@@ -465,6 +570,10 @@ ALPACA_API_KEY=your_alpaca_api_key_here
 ALPACA_SECRET_KEY=your_alpaca_secret_key_here
 POLYGON_API_KEY=your_polygon_api_key_here
 OPTIONS_PROVIDER=polygon
+
+# Optional: Conversation Memory & Metrics Logging (Supabase)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_supabase_anon_key_here
 ```
 
 **Note**: `PORT` is automatically set by Render, no need to add it.
@@ -528,15 +637,19 @@ This service uses **Polygon.io** for professional-grade options data with full G
 | `OPT_STALE_TTL_SEC` | No | Stale cache TTL in seconds (default: `86400` = 24 hours) |
 | `PORT` | No | Server port (default: 3000, auto-set on Render) |
 | `BASE_PUBLIC_URL` | No | Public base URL for absolute URLs (e.g., `https://ainews-ybbv.onrender.com`) |
+| `SUPABASE_URL` | No | Supabase project URL (enables conversation memory & metrics logging) |
+| `SUPABASE_ANON_KEY` | No | Supabase anon/public key (enables conversation memory & metrics logging) |
 
 ### Example Output with Quant
 
 ```json
 {
   "success": true,
-  "analysis": "NVDA rose 3.1% today on strong AI chip demand. Quant: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp; ATM IV: 34.6%@485; Put/Call Vol Ratio: 1.23; Implied Move: $12.80 (2.7%).\n\nBULLISH: Strong demand momentum suggests continued upside, with negative dealer gamma potentially amplifying moves higher...\n\nBEARISH: Elevated implied volatility and skew indicate market participants are hedging downside risk despite the rally...\n\nNEUTRAL: Wait for confirmation of sustained demand before committing, as the implied move suggests significant uncertainty...\n\n—\nData sources:\n• Alpaca (price @ 14:32 UTC)\n• Options (Polygon.io @ 14:30 UTC)\n• Finnhub (news @ 14:31 UTC)"
+  "analysis": "NVDA rose 3.1% today on strong AI chip demand.\n\nQuant Metrics: Dealer Gamma (0-30d): -$1.2B (short); Skew (±10%): 5.4 pp; ATM IV: 34.6%@485; Put/Call Vol Ratio: 1.23; Implied Move: $12.80 (2.7%) [29 Oct 2:25 pm GMT]\n\nBULLISH: Strong demand momentum suggests continued upside, with negative dealer gamma potentially amplifying moves higher...\n\nBEARISH: Elevated implied volatility and skew indicate market participants are hedging downside risk despite the rally...\n\nNEUTRAL: Wait for confirmation of sustained demand before committing, as the implied move suggests significant uncertainty..."
 }
 ```
+
+**Note**: The quant metrics line includes a data freshness timestamp in UK time (GMT/BST), showing when the options data is from (15 minutes delayed during market hours for paid Polygon.io plans).
 
 ### Graceful Degradation
 
@@ -689,8 +802,12 @@ All important operations are logged with timestamps:
 - **Framework**: Express.js
 - **HTTP Client**: node-fetch (v3)
 - **AI**: Claude Sonnet 4 (Anthropic)
+- **Price Data**: Alpaca Markets API
+- **Options Data**: Polygon.io API
 - **News**: Finnhub API
+- **Database**: Supabase (PostgreSQL) - optional for conversation memory & metrics logging
 - **Deployment**: Render
+- **CI/CD**: GitHub Actions (for automated daily metrics logging)
 
 ## API Response Times
 
@@ -925,7 +1042,14 @@ OPT_STALE_TTL_SEC=86400      # 24 hours stale cache
 OPT_MAX_DAYS=30              # Fetch options 0-30 days out
 POLYGON_API_KEY=your_key     # Polygon.io API key (paid tier)
 OPTIONS_PROVIDER=polygon     # Options data provider
+ENABLE_CACHE_WARMER=false    # Cache warmer disabled by default (Yahoo blocks datacenter IPs)
 ```
+
+**Cache Warmer Status:**
+- Disabled by default due to Yahoo Finance blocking datacenter IPs
+- Set `ENABLE_CACHE_WARMER=true` to enable (only works from non-datacenter IPs)
+- Pre-fetches options data for popular symbols on startup
+- Polygon.io provider doesn't need cache warmer (no IP blocking issues)
 
 ---
 
@@ -1010,6 +1134,333 @@ npm run test:all      # 61 tests total
 npm run test:news     # 26 news/URL tests
 npm run test:sentiment # 35 sentiment classification tests
 ```
+
+---
+
+## 💬 Conversation Memory & Historical Metrics
+
+### Overview
+
+The API supports two optional Supabase-powered features:
+1. **Conversation Memory** - Enables follow-up questions with context
+2. **Historical Metrics Logging** - Stores daily snapshots of all 14 quant metrics
+
+Both features are **optional** and **backward compatible**. If Supabase credentials are not set, the API works normally without these features.
+
+### Setup Instructions
+
+#### Step 1: Create Supabase Database Tables
+
+1. Visit your Supabase dashboard: https://supabase.com/dashboard
+2. Go to **SQL Editor** → **New Query**
+3. Copy and paste the entire contents of `supabase_schema.sql`
+4. Click **Run**
+
+This creates:
+- `conversations` table (for session memory)
+- `metrics_history` table (for historical logging)
+- Indexes for fast queries
+- Row Level Security policies
+
+#### Step 2: Add Environment Variables
+
+**Local (.env file):**
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Render (Environment tab):**
+1. Go to Render dashboard → Your service → Environment
+2. Add the same `SUPABASE_URL` and `SUPABASE_ANON_KEY` variables
+3. Save and redeploy
+
+#### Step 3: Verify Setup
+
+Check startup logs for:
+```
+✅ Conversation Memory: Enabled (Supabase)
+✅ Metrics Logging: Enabled (Supabase)
+```
+
+Or test endpoints:
+```bash
+curl http://localhost:3000/stats/conversations
+curl http://localhost:3000/stats/metrics
+```
+
+Both should return `"enabled": true`.
+
+### Conversation Memory
+
+**How it works:**
+
+The API can remember conversation context when you provide a `conversation_id`:
+
+**Request:**
+```json
+{
+  "query": "What about the gamma?",
+  "conversation_id": "uuid-here"
+}
+```
+
+**Behavior:**
+- Loads last ticker from conversation history
+- Uses context ticker if no ticker in new query
+- Saves conversation after analysis
+- Auto-expires conversations after 30 minutes
+
+**Example Flow:**
+```bash
+# First query - establishes context
+curl -X POST http://localhost:3000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "AAPL",
+    "conversation_id": "test-conv-123"
+  }'
+
+# Follow-up - automatically uses AAPL from context
+curl -X POST http://localhost:3000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What about the skew?",
+    "conversation_id": "test-conv-123"
+  }'
+
+# Switch ticker - updates context
+curl -X POST http://localhost:3000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "TSLA",
+    "conversation_id": "test-conv-123"
+  }'
+```
+
+**iOS App Integration:**
+```swift
+// Generate conversation ID once per session
+let conv_id = UUID().uuidString
+
+// First query
+api.analyze(query: "AAPL", conversationId: conv_id)
+
+// Follow-up (remembers AAPL)
+api.analyze(query: "What about the gamma?", conversationId: conv_id)
+
+// Switch ticker
+api.analyze(query: "TSLA", conversationId: conv_id)
+```
+
+### Historical Metrics Logging
+
+**How it works:**
+
+Automatically logs metrics snapshots to Supabase after every successful analysis:
+- One snapshot per ticker per day (upsert logic)
+- Stores all 14 quant metrics + metadata
+- Tracks data freshness (fresh/stale/unavailable)
+
+**Automatic Behavior:**
+Every `/analyze` request with valid options data automatically logs to `metrics_history` table. No additional API calls needed.
+
+**Query Historical Data:**
+```bash
+# Get 30 days of metrics for AAPL
+curl http://localhost:3000/history/AAPL?days=30
+
+# Get last 7 days
+curl http://localhost:3000/history/TSLA?days=7
+```
+
+**Use Cases:**
+- Chart dealer gamma over time
+- Track IV term structure changes
+- Analyze skew trends
+- Build custom analytics dashboards
+
+**Example Response:**
+```json
+{
+  "ticker": "AAPL",
+  "days_requested": 30,
+  "snapshots": 15,
+  "data": [
+    {
+      "date": "2025-10-29",
+      "price": 175.50,
+      "dealer_gamma_value": -1.2,
+      "dealer_gamma_direction": "short",
+      "skew_pp": 5.4,
+      "atm_iv": 34.6,
+      "put_call_vol_ratio": 1.23,
+      "implied_move_pct": 2.7,
+      "max_pain": 175.00,
+      ...
+    }
+  ]
+}
+```
+
+### Cost Considerations
+
+**Supabase Free Tier:**
+- 500 MB database
+- 2 GB bandwidth/month
+- 50,000 monthly active users
+- **Should be plenty for most use cases!**
+
+**Storage Estimates:**
+- Conversations: ~100 bytes each, expires after 30 min
+- Metrics: ~2 KB per ticker per day
+- 1000 daily queries = ~2 MB/day = 60 MB/month
+
+**Claude API Costs (with memory):**
+- 2-3x token usage for short conversations (< 5 turns)
+- Still very affordable at current scale
+
+### Backward Compatibility
+
+**Everything still works without Supabase!**
+
+- If Supabase credentials not set, features are disabled
+- All existing functionality unchanged
+- No breaking changes to API
+- `conversation_id` is optional parameter
+- API never crashes if Supabase is unavailable (graceful degradation)
+
+### Troubleshooting
+
+**"Conversation Memory: Disabled" or "Metrics Logging: Disabled"**
+- Check `SUPABASE_URL` and `SUPABASE_ANON_KEY` in environment variables
+- Verify no typos in variable names
+- Ensure values start with `https://` and `eyJ` respectively
+
+**"relation 'conversations' does not exist"**
+- Run the SQL schema in Supabase SQL Editor
+- Verify tables appear in Table Editor
+
+**Follow-up doesn't work**
+- Make sure using same `conversation_id`
+- Check logs for "Using ticker from context"
+- Verify conversation was saved (check Supabase Table Editor)
+
+**No metrics in /history/:ticker**
+- Query the ticker first through `/analyze`
+- Wait a moment for async logging to complete
+- Check Supabase Table Editor for `metrics_history` rows
+
+### Automated Daily Metrics Logging
+
+**GitHub Actions Workflow:**
+- Automatically logs metrics for popular tickers every weekday at 10 AM ET
+- Runs via GitHub Actions (`.github/workflows/daily-metrics-logger.yml`)
+- Uses the `/analyze` API endpoint to trigger metrics logging
+- Ensures historical data is captured even if users don't query certain tickers
+
+**Manual Scripts:**
+Two scripts are available for manual metrics logging:
+
+1. **`daily_metrics_logger.js`** - Logs via API endpoint (recommended)
+   ```bash
+   node daily_metrics_logger.js
+   node daily_metrics_logger.js --tickers AAPL,TSLA,NVDA
+   ```
+
+2. **`daily_metrics_direct.js`** - Direct Supabase write (requires Polygon API access)
+   ```bash
+   node daily_metrics_direct.js
+   node daily_metrics_direct.js --tickers AAPL,TSLA
+   ```
+
+**Configuration:**
+- Default ticker list: Popular symbols (SPY, QQQ, AAPL, NVDA, TSLA, etc.)
+- Set `API_URL` environment variable for API-based logger
+- Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` for direct logger
+
+### Historical Data Backfill
+
+**Production-Ready Backfill Script:**
+
+The `backfill_history.js` script allows you to populate historical metrics data for past dates that weren't automatically logged.
+
+**Usage:**
+```bash
+# Default: 30 days, 6 default tickers (SPY, QQQ, AAPL, NVDA, TSLA, MSFT)
+node backfill_history.js
+
+# Custom days
+node backfill_history.js --days=60
+
+# Custom tickers
+node backfill_history.js --tickers=SPY,QQQ,AAPL
+
+# Both
+node backfill_history.js --days=30 --tickers=SPY,QQQ,AAPL,NVDA,TSLA,MSFT
+```
+
+**Features:**
+- ✅ **Automatic weekend skipping** - Only processes trading days
+- ✅ **Rate limiting** - 12 seconds between requests (Polygon limit: 5/min)
+- ✅ **Resume capability** - Checks existing records, skips duplicates
+- ✅ **Retry logic** - 3 attempts per failed date with exponential backoff
+- ✅ **Progress tracking** - Real-time console output with emoji indicators
+- ✅ **Error logging** - All errors logged to `backfill_errors.log`
+- ✅ **Graceful error handling** - Never crashes completely, always logs errors
+- ✅ **Backfilled flag** - Marks data with `data_freshness: 'backfilled'` to distinguish from live data
+
+**Important Limitation:**
+⚠️ Polygon.io does **NOT** provide historical options data for past dates. Their snapshot endpoint only returns current/live options data.
+
+The script uses:
+- **Historical stock prices** from Polygon aggregates endpoint (accurate)
+- **Current options snapshots** from Polygon (approximation - uses today's options structure)
+
+This means backfilled metrics are an **approximation** using current options data with historical prices. For true historical options data, you would need:
+- CBOE historical options feed
+- Bloomberg Terminal data
+- Another provider with historical options chains
+
+**Expected Output:**
+```
+========================================
+🚀 Starting backfill
+========================================
+Days: 30 (20 weekdays)
+Tickers: SPY, QQQ, AAPL, NVDA, TSLA, MSFT
+Date range: 2025-10-06 to 2025-10-31
+Rate limit: 12s between requests
+========================================
+
+📊 Backfilling SPY...
+✅ SPY 2025-10-06 | Dealer Gamma: $225.9B (short) | Skew: 26.5 pp
+✅ SPY 2025-10-07 | Dealer Gamma: $217.9B (short) | Skew: 28.1 pp
+⏭️  SPY 2025-10-11 (weekend - skipped)
+✅ SPY 2025-10-13 | Dealer Gamma: $196.5B (short) | Skew: 21.1 pp
+...
+
+✅ Completed SPY: 17/20 days (skipped 3 weekends, 3 existing, 0 failed)
+
+🎉 Backfill complete!
+Total records inserted: 94
+Skipped (existing/weekends): 18
+Failed: 8
+Errors logged to: /path/to/backfill_errors.log
+Runtime: 30 minutes
+========================================
+```
+
+**Requirements:**
+- `POLYGON_API_KEY` environment variable
+- `SUPABASE_URL` environment variable
+- `SUPABASE_ANON_KEY` environment variable
+- `.env` file with credentials (uses `dotenv`)
+
+**Performance:**
+- ~2 minutes per ticker for 20 trading days
+- 12 second delay between requests (Polygon rate limit)
+- For 6 tickers × 20 days = ~24 minutes total runtime
 
 ---
 

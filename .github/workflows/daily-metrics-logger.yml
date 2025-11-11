@@ -23,13 +23,37 @@ jobs:
       - name: Install dependencies
         run: npm install node-fetch
       
+      - name: Check API availability
+        run: |
+          echo "Checking API availability..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://ainews-ybbv.onrender.com/ || echo "000")
+          if [ "$response" != "200" ]; then
+            echo "⚠️  Warning: API returned HTTP $response (might be cold-starting)"
+          else
+            echo "✅ API is available (HTTP 200)"
+          fi
+      
       - name: Run daily metrics logger (via API)
-        run: node daily_metrics_logger.js
+        id: log-metrics
+        run: |
+          echo "Starting metrics logging at $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          node daily_metrics_logger.js || {
+            echo "⚠️  Metrics logging completed with warnings/errors"
+            exit 0  # Don't fail the workflow - allow partial success
+          }
         env:
           API_URL: https://ainews-ybbv.onrender.com
+        continue-on-error: true
       
       - name: Check metrics stats
         run: |
-          echo "Checking final metrics stats..."
-          curl -s https://ainews-ybbv.onrender.com/stats/metrics | jq '.'
+          echo ""
+          echo "=========================================="
+          echo "Final Metrics Statistics"
+          echo "=========================================="
+          echo "Check time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo ""
+          curl -s https://ainews-ybbv.onrender.com/stats/metrics | jq '.' || echo "Unable to fetch stats"
+          echo ""
+          echo "Note: Check Supabase metrics_history table for actual logged dates"
 

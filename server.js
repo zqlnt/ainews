@@ -703,6 +703,333 @@ const calculateSkewFromRows = (rows, spotPrice) => {
   };
 };
 
+/**
+ * Enhanced historical pattern analysis with robust statistics
+ * Requires ≥5 samples, uses median/MAD fallback, includes provenance
+ */
+function analyzeHistoricalPatterns(historicalMetrics, currentMetrics, optionsData) {
+  const patterns = {
+    gamma: null,
+    skew: null,
+    iv: null,
+    correlations: [],
+    metadata: {
+      sampleCount: 0,
+      dataAgeSeconds: null,
+      provenance: 'live' // 'live', 'cached', 'backfilled', 'mixed'
+    }
+  };
+
+  if (!historicalMetrics || historicalMetrics.length < 5) {
+    patterns.metadata.sampleCount = historicalMetrics?.length || 0;
+    return patterns; // Need at least 5 data points for meaningful analysis
+  }
+
+  // Sort by date (oldest first)
+  const sorted = [...historicalMetrics].sort((a, b) => 
+    new Date(a.date) - new Date(b.date)
+  );
+  
+  patterns.metadata.sampleCount = sorted.length;
+  
+  // Calculate data age (seconds since oldest data point)
+  const oldestDate = new Date(sorted[0].date);
+  patterns.metadata.dataAgeSeconds = Math.floor((Date.now() - oldestDate.getTime()) / 1000);
+  
+  // Determine provenance (check if any data is backfilled)
+  const hasBackfilled = sorted.some(h => h.data_freshness === 'backfilled');
+  const hasLive = sorted.some(h => h.data_freshness === 'fresh' || h.data_freshness === 'stale');
+  patterns.metadata.provenance = hasBackfilled && hasLive ? 'mixed' : hasBackfilled ? 'backfilled' : 'live';
+
+  // Helper: Calculate median
+  const median = (arr) => {
+    if (arr.length === 0) return 0;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0 
+      ? (sorted[mid - 1] + sorted[mid]) / 2 
+      : sorted[mid];
+  };
+
+  // Helper: Calculate MAD (Median Absolute Deviation)
+  const mad = (arr) => {
+    if (arr.length === 0) return 0;
+    const med = median(arr);
+    const deviations = arr.map(v => Math.abs(v - med));
+    return median(deviations);
+  };
+
+  // Helper: Robust trend using median/MAD
+  const robustTrend = (values) => {
+    if (values.length < 5) return null;
+    
+    const med = median(values);
+    const m = mad(values);
+    
+    // Split into first half and second half
+    const mid = Math.floor(values.length / 2);
+    const firstHalf = values.slice(0, mid);
+    const secondHalf = values.slice(mid);
+    
+    const firstMed = median(firstHalf);
+    const secondMed = median(secondHalf);
+    
+    const change = secondMed - firstMed;
+    const changePercent = med > 0 ? (change / med) * 100 : 0;
+    
+    // Use MAD to determine if change is significant
+    const isSignificant = Math.abs(change) > (m * 1.5); // 1.5x MAD threshold
+    
+    if (!isSignificant) {
+      return { trend: 'stable', strength: 0, method: 'robust' };
+    }
+    
+    return {
+      trend: change > 0 ? 'increasing' : 'decreasing',
+      strength: Math.abs(changePercent).toFixed(1),
+      method: 'robust',
+      change: change.toFixed(2)
+    };
+  };
+
+  // Helper: Linear regression (for comparison, fallback to robust if unstable)
+  const linearTrend = (values) => {
+    if (values.length < 5) return null;
+    
+    const n = values.length;
+    const x = Array.from({ length: n }, (_, i) => i);
+    const sumX = x.reduce((a, b) => a + b, 0);
+    const sumY = values.reduce((a, b) => a + b, 0);
+    const sumXY = x.reduce((sum, xi, i) => sum + xi * values[i], 0);
+    const sumX2 = x.reduce((sum, xi) => sum + xi * xi, 0);
+    
+    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const avg = sumY / n;
+    const strength = avg > 0 ? Math.abs(slope) / avg * 100 : 0;
+    
+    // Check stability: if R² is too low, use robust method
+    const yMean = avg;
+    const ssRes = values.reduce((sum, y, i) => {
+      const predicted = yMean + slope * (i - (n-1)/2);
+      return sum + Math.pow(y - predicted, 2);
+    }, 0);
+    const ssTot = values.reduce((sum, y) => sum + Math.pow(y - yMean, 2), 0);
+    const rSquared = ssTot > 0 ? 1 - (ssRes / ssTot) : 0;
+    
+    const isStable = rSquared > 0.3; // Require R² > 0.3 for stability
+    
+    return {
+      trend: slope > 0 ? 'increasing' : slope < 0 ? 'decreasing' : 'stable',
+      strength: strength.toFixed(1),
+      method: isStable ? 'linear' : 'robust',
+      rSquared: rSquared.toFixed(2)
+    };
+  };
+
+  // 1. GAMMA ANALYSIS (requires ≥5 samples)
+  const gammaValues = sorted
+    .filter(h => h.dealer_gamma_value !== null)
+    .map(h => ({ date: h.date, value: Math.abs(h.dealer_gamma_value) }));
+  
+  if (gammaValues.length >= 5 && currentMetrics.gamma && !currentMetrics.gamma.unavailable) {
+    const currentGamma = Math.abs(currentMetrics.gamma.value);
+    const values = gammaValues.map(v => v.value);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const stdDev = Math.sqrt(values.reduce((sum, v) => sum + Math.pow(v - avg, 2), 0) / values.length);
+    
+    // Try linear trend first, fallback to robust if unstable
+    const linearResult = linearTrend(values);
+    const robustResult = robustTrend(values);
+    const trendResult = linearResult?.method === 'linear' ? linearResult : robustResult;
+    
+    // Percentile
+    const sortedValues = [...values].sort((a, b) => a - b);
+    const percentile = (sortedValues.filter(v => v < currentGamma).length / sortedValues.length) * 100;
+    const percentileLabel = percentile >= 75 ? 'top quartile' : percentile <= 25 ? 'bottom quartile' : 'middle range';
+    
+    // Z-score
+    const zScore = stdDev > 0 ? (currentGamma - avg) / stdDev : 0;
+    const zScoreLabel = Math.abs(zScore) > 2 ? 'extreme' : Math.abs(zScore) > 1 ? 'unusual' : 'normal';
+    
+    patterns.gamma = {
+      current: currentGamma,
+      average: avg,
+      median: median(values),
+      stdDev: stdDev,
+      mad: mad(values),
+      trend: trendResult?.trend || 'insufficient_data',
+      trendStrength: trendResult?.strength || '0',
+      trendMethod: trendResult?.method || 'none',
+      percentile: percentile.toFixed(0),
+      percentileLabel,
+      zScore: zScore.toFixed(2),
+      zScoreLabel,
+      changeFromAvg: ((currentGamma - avg) / avg * 100).toFixed(1),
+      sampleCount: values.length,
+      dataAgeSeconds: patterns.metadata.dataAgeSeconds,
+      provenance: patterns.metadata.provenance
+    };
+  }
+
+  // 2. SKEW ANALYSIS (requires ≥5 samples)
+  const skewValues = sorted
+    .filter(h => h.skew_value !== null)
+    .map(h => ({ date: h.date, value: h.skew_value }));
+  
+  if (skewValues.length >= 5 && currentMetrics.skew && !currentMetrics.skew.unavailable) {
+    const currentSkew = currentMetrics.skew.value;
+    const values = skewValues.map(v => v.value);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    
+    const linearResult = linearTrend(values);
+    const robustResult = robustTrend(values);
+    const trendResult = linearResult?.method === 'linear' ? linearResult : robustResult;
+    
+    // Percentile
+    const sortedValues = [...values].sort((a, b) => a - b);
+    const percentile = (sortedValues.filter(v => v < currentSkew).length / sortedValues.length) * 100;
+    const percentileLabel = percentile >= 75 ? 'top quartile' : percentile <= 25 ? 'bottom quartile' : 'middle range';
+    
+    patterns.skew = {
+      current: currentSkew,
+      average: avg,
+      median: median(values),
+      trend: trendResult?.trend || 'insufficient_data',
+      trendStrength: trendResult?.strength || '0',
+      trendMethod: trendResult?.method || 'none',
+      percentileLabel,
+      changeFromAvg: (currentSkew - avg).toFixed(1),
+      sampleCount: values.length,
+      dataAgeSeconds: patterns.metadata.dataAgeSeconds,
+      provenance: patterns.metadata.provenance
+    };
+  }
+
+  // 3. IV ANALYSIS (requires ≥5 samples)
+  const ivValues = sorted
+    .filter(h => h.atm_iv_value !== null)
+    .map(h => ({ date: h.date, value: h.atm_iv_value }));
+  
+  if (ivValues.length >= 5 && currentMetrics.atmIV) {
+    const currentIV = currentMetrics.atmIV.percent;
+    const values = ivValues.map(v => v.value);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const stdDev = Math.sqrt(values.reduce((sum, v) => sum + Math.pow(v - avg, 2), 0) / values.length);
+    
+    const linearResult = linearTrend(values);
+    const robustResult = robustTrend(values);
+    const trendResult = linearResult?.method === 'linear' ? linearResult : robustResult;
+    
+    // Regime detection
+    const highIVThreshold = avg + stdDev;
+    const lowIVThreshold = avg - stdDev;
+    const regime = currentIV > highIVThreshold ? 'high volatility' : 
+                   currentIV < lowIVThreshold ? 'low volatility' : 'normal volatility';
+    
+    patterns.iv = {
+      current: currentIV,
+      average: avg,
+      median: median(values),
+      stdDev: stdDev,
+      trend: trendResult?.trend || 'insufficient_data',
+      trendStrength: trendResult?.strength || '0',
+      trendMethod: trendResult?.method || 'none',
+      regime,
+      changeFromAvg: (currentIV - avg).toFixed(1),
+      sampleCount: values.length,
+      dataAgeSeconds: patterns.metadata.dataAgeSeconds,
+      provenance: patterns.metadata.provenance
+    };
+  }
+
+  // 4. CORRELATION ANALYSIS (requires ≥5 matched dates with ±1 day tolerance)
+  if (gammaValues.length >= 5 && ivValues.length >= 5) {
+    // Match dates with ±1 day tolerance
+    const matched = [];
+    gammaValues.forEach(g => {
+      const gDate = new Date(g.date);
+      // Try exact match first
+      let iv = ivValues.find(iv => iv.date === g.date);
+      // If no exact match, try ±1 day
+      if (!iv) {
+        iv = ivValues.find(iv => {
+          const ivDate = new Date(iv.date);
+          const daysDiff = Math.abs((ivDate - gDate) / (1000 * 60 * 60 * 24));
+          return daysDiff <= 1;
+        });
+      }
+      if (iv) matched.push({ gamma: g.value, iv: iv.value, date: g.date });
+    });
+    
+    if (matched.length >= 5) {
+      const gammaAvg = matched.reduce((sum, m) => sum + m.gamma, 0) / matched.length;
+      const ivAvg = matched.reduce((sum, m) => sum + m.iv, 0) / matched.length;
+      
+      const numerator = matched.reduce((sum, m) => 
+        sum + (m.gamma - gammaAvg) * (m.iv - ivAvg), 0);
+      const gammaVar = matched.reduce((sum, m) => sum + Math.pow(m.gamma - gammaAvg, 2), 0);
+      const ivVar = matched.reduce((sum, m) => sum + Math.pow(m.iv - ivAvg, 2), 0);
+      
+      const correlation = (numerator / Math.sqrt(gammaVar * ivVar)) || 0;
+      
+      if (Math.abs(correlation) > 0.5) {
+        patterns.correlations.push({
+          metrics: 'gamma vs IV',
+          correlation: correlation.toFixed(2),
+          relationship: correlation > 0 ? 'positive' : 'negative',
+          strength: Math.abs(correlation) > 0.7 ? 'strong' : 'moderate',
+          matchedSamples: matched.length,
+          dataAgeSeconds: patterns.metadata.dataAgeSeconds,
+          provenance: patterns.metadata.provenance
+        });
+      }
+    }
+  }
+
+  // Similar correlation for skew vs IV
+  if (skewValues.length >= 5 && ivValues.length >= 5) {
+    const matched = [];
+    skewValues.forEach(s => {
+      const sDate = new Date(s.date);
+      let iv = ivValues.find(iv => iv.date === s.date);
+      if (!iv) {
+        iv = ivValues.find(iv => {
+          const ivDate = new Date(iv.date);
+          const daysDiff = Math.abs((ivDate - sDate) / (1000 * 60 * 60 * 24));
+          return daysDiff <= 1;
+        });
+      }
+      if (iv) matched.push({ skew: s.value, iv: iv.value, date: s.date });
+    });
+    
+    if (matched.length >= 5) {
+      const skewAvg = matched.reduce((sum, m) => sum + m.skew, 0) / matched.length;
+      const ivAvg = matched.reduce((sum, m) => sum + m.iv, 0) / matched.length;
+      
+      const numerator = matched.reduce((sum, m) => 
+        sum + (m.skew - skewAvg) * (m.iv - ivAvg), 0);
+      const skewVar = matched.reduce((sum, m) => sum + Math.pow(m.skew - skewAvg, 2), 0);
+      const ivVar = matched.reduce((sum, m) => sum + Math.pow(m.iv - ivAvg, 2), 0);
+      
+      const correlation = (numerator / Math.sqrt(skewVar * ivVar)) || 0;
+      
+      if (Math.abs(correlation) > 0.5) {
+        patterns.correlations.push({
+          metrics: 'skew vs IV',
+          correlation: correlation.toFixed(2),
+          relationship: correlation > 0 ? 'positive' : 'negative',
+          strength: Math.abs(correlation) > 0.7 ? 'strong' : 'moderate',
+          matchedSamples: matched.length,
+          dataAgeSeconds: patterns.metadata.dataAgeSeconds,
+          provenance: patterns.metadata.provenance
+        });
+      }
+    }
+  }
+
+  return patterns;
+}
+
 // Test Claude API connection
 const testClaudeAPI = async () => {
   try {
@@ -1264,6 +1591,21 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
       log(`[METRICS] sym=${symbol} atm_iv=${atmIVStr} pcr=${pcrStr} impmv=${impMvStr}`);
     }
 
+    // Fetch historical metrics for trend analysis (if enabled)
+    let historicalMetrics = null;
+    if (symbol && isMetricsLoggingEnabled() && hasOptionsData) {
+      try {
+        const history = await getMetricsHistory(symbol, 7); // Last 7 days
+        if (history && history.length > 0) {
+          historicalMetrics = history;
+          log(`📊 Loaded ${history.length} days of historical metrics for trend analysis`);
+        }
+      } catch (histError) {
+        log(`⚠️  Failed to load historical metrics: ${histError.message}`);
+        // Continue without historical data - non-blocking
+      }
+    }
+
     // Task 6: Construct strict prompt with output template
     let prompt = `You are a financial analysis assistant. Analyze the following stock query and provide a structured response.
 
@@ -1360,6 +1702,66 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
       if (optionsData.vanna) {
         prompt += `\n- Vanna: ${optionsData.vanna.formatted}
   → ${optionsData.vanna.interpretation}. Cross-Greek showing how delta changes with IV. Important during volatility events.`;
+      }
+      
+      // Add historical trends if available (enhanced with pattern analysis)
+      if (historicalMetrics && historicalMetrics.length >= 5) {
+        // Enhanced pattern analysis
+        const patterns = analyzeHistoricalPatterns(historicalMetrics, {
+          gamma,
+          skew,
+          atmIV
+        }, optionsData);
+        
+        // Calculate data age for current options data
+        const currentDataAge = optionsData.fetchedAt 
+          ? Math.floor((Date.now() - new Date(optionsData.fetchedAt).getTime()) / 1000)
+          : 0;
+        const currentProvenance = optionsData.isStale ? 'cached' : 'live';
+        
+        prompt += `\n\nHISTORICAL CONTEXT (${patterns.metadata.sampleCount} days, ${Math.floor(patterns.metadata.dataAgeSeconds / 86400)} days old, ${patterns.metadata.provenance} data):`;
+        prompt += `\n\nPATTERN ANALYSIS (factual statistics only - use these for insights, do not guess):`;
+        
+        if (patterns.gamma && patterns.gamma.trend !== 'insufficient_data') {
+          const g = patterns.gamma;
+          prompt += `\n\nDealer Gamma Patterns (${g.sampleCount} samples, ${g.provenance}, ${Math.floor(g.dataAgeSeconds / 86400)}d old):`;
+          prompt += `\n- Current: $${g.current.toFixed(1)}B | 7-day avg: $${g.average.toFixed(1)}B | Median: $${g.median.toFixed(1)}B | Change: ${g.changeFromAvg > 0 ? '+' : ''}${g.changeFromAvg}%`;
+          prompt += `\n- Trend: ${g.trend} (${g.trendStrength}% per day, method: ${g.trendMethod}) | Position: ${g.percentileLabel} (${g.percentile}th percentile)`;
+          prompt += `\n- Statistical significance: ${g.zScoreLabel} (z-score: ${g.zScore}, std dev: $${g.stdDev.toFixed(1)}B, MAD: $${g.mad.toFixed(1)}B)`;
+          prompt += `\n  → Interpret: ${g.trend === 'increasing' ? 'Gamma exposure building' : g.trend === 'decreasing' ? 'Gamma exposure declining' : 'Stable gamma exposure'}. `;
+          prompt += `${g.percentileLabel === 'top quartile' ? 'Current levels are historically elevated, suggesting increased dealer hedging activity.' : g.percentileLabel === 'bottom quartile' ? 'Current levels are historically low, suggesting reduced dealer hedging activity.' : 'Current levels are within normal historical range.'}`;
+        }
+        
+        if (patterns.skew && patterns.skew.trend !== 'insufficient_data') {
+          const s = patterns.skew;
+          prompt += `\n\nSkew Patterns (${s.sampleCount} samples, ${s.provenance}, ${Math.floor(s.dataAgeSeconds / 86400)}d old):`;
+          prompt += `\n- Current: ${s.current.toFixed(1)} pp | 7-day avg: ${s.average.toFixed(1)} pp | Median: ${s.median.toFixed(1)} pp | Change: ${s.changeFromAvg > 0 ? '+' : ''}${s.changeFromAvg} pp`;
+          prompt += `\n- Trend: ${s.trend} (${s.trendStrength}% per day, method: ${s.trendMethod}) | Position: ${s.percentileLabel}`;
+          prompt += `\n  → Interpret: ${s.trend === 'increasing' ? 'Put protection demand rising' : s.trend === 'decreasing' ? 'Put protection demand falling' : 'Stable skew levels'}. `;
+          prompt += `${s.percentileLabel === 'top quartile' ? 'Current skew is elevated, indicating heightened fear/hedging demand.' : s.percentileLabel === 'bottom quartile' ? 'Current skew is depressed, indicating low fear/hedging demand.' : 'Current skew is within normal range.'}`;
+        }
+        
+        if (patterns.iv && patterns.iv.trend !== 'insufficient_data') {
+          const iv = patterns.iv;
+          prompt += `\n\nATM IV Patterns (${iv.sampleCount} samples, ${iv.provenance}, ${Math.floor(iv.dataAgeSeconds / 86400)}d old):`;
+          prompt += `\n- Current: ${iv.current.toFixed(1)}% | 7-day avg: ${iv.average.toFixed(1)}% | Median: ${iv.median.toFixed(1)}% | Change: ${iv.changeFromAvg > 0 ? '+' : ''}${iv.changeFromAvg} pp`;
+          prompt += `\n- Trend: ${iv.trend} (${iv.trendStrength}% per day, method: ${iv.trendMethod}) | Regime: ${iv.regime}`;
+          prompt += `\n  → Interpret: ${iv.regime === 'high volatility' ? 'Currently in elevated volatility regime - options pricing reflects higher uncertainty.' : iv.regime === 'low volatility' ? 'Currently in low volatility regime - options pricing reflects lower uncertainty.' : 'Currently in normal volatility regime.'} `;
+          prompt += `${iv.trend === 'increasing' ? 'Volatility expectations are rising.' : iv.trend === 'decreasing' ? 'Volatility expectations are falling.' : 'Volatility expectations are stable.'}`;
+        }
+        
+        if (patterns.correlations.length > 0) {
+          prompt += `\n\nMetric Correlations (historical relationships, ${patterns.correlations[0].matchedSamples} matched samples):`;
+          patterns.correlations.forEach(corr => {
+            prompt += `\n- ${corr.metrics}: ${corr.relationship} correlation (${corr.correlation}, ${corr.strength}, ${corr.provenance} data, ${Math.floor(corr.dataAgeSeconds / 86400)}d old)`;
+            prompt += `\n  → When these metrics move together, it suggests: ${corr.relationship === 'positive' ? 'they tend to increase/decrease together historically' : 'they tend to move in opposite directions historically'}`;
+          });
+        }
+        
+        prompt += `\n\nCurrent Data Provenance: ${currentProvenance} (age: ${Math.floor(currentDataAge / 60)} minutes)`;
+        prompt += `\n\nIMPORTANT: Use these factual patterns to inform your analysis. State patterns as facts (e.g., "Gamma has been increasing 2.1% per day over the past week using robust median method"), not predictions. Do not guess future movements - only describe what the data shows. Discount backfilled or stale data appropriately.`;
+      } else if (historicalMetrics && historicalMetrics.length > 0 && historicalMetrics.length < 5) {
+        prompt += `\n\n⚠️ Historical data available but insufficient for pattern analysis (${historicalMetrics.length} samples, need ≥5 for reliable trends/correlations).`;
       }
     }
 

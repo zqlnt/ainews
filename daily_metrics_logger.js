@@ -55,9 +55,11 @@ async function logTicker(ticker) {
     
     if (hasQuant) {
       console.log(`✅ ${ticker}: Logged with quant metrics`);
+      // Add small delay to ensure Supabase write completes
+      await new Promise(resolve => setTimeout(resolve, 500));
       return true;
     } else {
-      console.log(`⚠️  ${ticker}: Logged but no quant metrics (may be after hours)`);
+      console.log(`⚠️  ${ticker}: Logged but no quant metrics (may be after hours or API unavailable)`);
       return false;
     }
   } catch (error) {
