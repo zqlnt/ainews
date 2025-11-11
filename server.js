@@ -1704,64 +1704,56 @@ OPTIONS FLOW & GREEKS (from Polygon.io)${dataAgeNote}:`;
   → ${optionsData.vanna.interpretation}. Cross-Greek showing how delta changes with IV. Important during volatility events.`;
       }
       
-      // Add historical trends if available (enhanced with pattern analysis)
+      // Add historical context for intelligent analysis (background information, not a new section)
       if (historicalMetrics && historicalMetrics.length >= 5) {
-        // Enhanced pattern analysis
+        // Enhanced pattern analysis (calculated but used subtly)
         const patterns = analyzeHistoricalPatterns(historicalMetrics, {
           gamma,
           skew,
           atmIV
         }, optionsData);
         
-        // Calculate data age for current options data
-        const currentDataAge = optionsData.fetchedAt 
-          ? Math.floor((Date.now() - new Date(optionsData.fetchedAt).getTime()) / 1000)
-          : 0;
-        const currentProvenance = optionsData.isStale ? 'cached' : 'live';
-        
-        prompt += `\n\nHISTORICAL CONTEXT (${patterns.metadata.sampleCount} days, ${Math.floor(patterns.metadata.dataAgeSeconds / 86400)} days old, ${patterns.metadata.provenance} data):`;
-        prompt += `\n\nPATTERN ANALYSIS (factual statistics only - use these for insights, do not guess):`;
+        // Build concise historical context notes for Claude to use naturally
+        let historicalNotes = [];
         
         if (patterns.gamma && patterns.gamma.trend !== 'insufficient_data') {
           const g = patterns.gamma;
-          prompt += `\n\nDealer Gamma Patterns (${g.sampleCount} samples, ${g.provenance}, ${Math.floor(g.dataAgeSeconds / 86400)}d old):`;
-          prompt += `\n- Current: $${g.current.toFixed(1)}B | 7-day avg: $${g.average.toFixed(1)}B | Median: $${g.median.toFixed(1)}B | Change: ${g.changeFromAvg > 0 ? '+' : ''}${g.changeFromAvg}%`;
-          prompt += `\n- Trend: ${g.trend} (${g.trendStrength}% per day, method: ${g.trendMethod}) | Position: ${g.percentileLabel} (${g.percentile}th percentile)`;
-          prompt += `\n- Statistical significance: ${g.zScoreLabel} (z-score: ${g.zScore}, std dev: $${g.stdDev.toFixed(1)}B, MAD: $${g.mad.toFixed(1)}B)`;
-          prompt += `\n  → Interpret: ${g.trend === 'increasing' ? 'Gamma exposure building' : g.trend === 'decreasing' ? 'Gamma exposure declining' : 'Stable gamma exposure'}. `;
-          prompt += `${g.percentileLabel === 'top quartile' ? 'Current levels are historically elevated, suggesting increased dealer hedging activity.' : g.percentileLabel === 'bottom quartile' ? 'Current levels are historically low, suggesting reduced dealer hedging activity.' : 'Current levels are within normal historical range.'}`;
+          const trendDesc = g.trend === 'increasing' ? 'building' : g.trend === 'decreasing' ? 'declining' : 'stable';
+          const percentileDesc = g.percentileLabel === 'top quartile' ? 'historically elevated' : 
+                                 g.percentileLabel === 'bottom quartile' ? 'historically low' : 'within normal range';
+          historicalNotes.push(`Dealer Gamma: Currently $${g.current.toFixed(1)}B (${g.changeFromAvg > 0 ? '+' : ''}${g.changeFromAvg}% vs ${g.sampleCount}-day avg $${g.average.toFixed(1)}B). Trend: ${trendDesc} (${g.trendStrength}% per day, ${g.trendMethod} method). Position: ${percentileDesc} (${g.percentile}th percentile, z-score: ${g.zScore}).`);
         }
         
         if (patterns.skew && patterns.skew.trend !== 'insufficient_data') {
           const s = patterns.skew;
-          prompt += `\n\nSkew Patterns (${s.sampleCount} samples, ${s.provenance}, ${Math.floor(s.dataAgeSeconds / 86400)}d old):`;
-          prompt += `\n- Current: ${s.current.toFixed(1)} pp | 7-day avg: ${s.average.toFixed(1)} pp | Median: ${s.median.toFixed(1)} pp | Change: ${s.changeFromAvg > 0 ? '+' : ''}${s.changeFromAvg} pp`;
-          prompt += `\n- Trend: ${s.trend} (${s.trendStrength}% per day, method: ${s.trendMethod}) | Position: ${s.percentileLabel}`;
-          prompt += `\n  → Interpret: ${s.trend === 'increasing' ? 'Put protection demand rising' : s.trend === 'decreasing' ? 'Put protection demand falling' : 'Stable skew levels'}. `;
-          prompt += `${s.percentileLabel === 'top quartile' ? 'Current skew is elevated, indicating heightened fear/hedging demand.' : s.percentileLabel === 'bottom quartile' ? 'Current skew is depressed, indicating low fear/hedging demand.' : 'Current skew is within normal range.'}`;
+          const trendDesc = s.trend === 'increasing' ? 'rising' : s.trend === 'decreasing' ? 'falling' : 'stable';
+          const percentileDesc = s.percentileLabel === 'top quartile' ? 'elevated' : 
+                                 s.percentileLabel === 'bottom quartile' ? 'depressed' : 'normal';
+          historicalNotes.push(`Skew: Currently ${s.current.toFixed(1)} pp (${s.changeFromAvg > 0 ? '+' : ''}${s.changeFromAvg} pp vs ${s.sampleCount}-day avg ${s.average.toFixed(1)} pp). Trend: ${trendDesc} (${s.trendStrength}% per day, ${s.trendMethod} method). Position: ${percentileDesc}.`);
         }
         
         if (patterns.iv && patterns.iv.trend !== 'insufficient_data') {
           const iv = patterns.iv;
-          prompt += `\n\nATM IV Patterns (${iv.sampleCount} samples, ${iv.provenance}, ${Math.floor(iv.dataAgeSeconds / 86400)}d old):`;
-          prompt += `\n- Current: ${iv.current.toFixed(1)}% | 7-day avg: ${iv.average.toFixed(1)}% | Median: ${iv.median.toFixed(1)}% | Change: ${iv.changeFromAvg > 0 ? '+' : ''}${iv.changeFromAvg} pp`;
-          prompt += `\n- Trend: ${iv.trend} (${iv.trendStrength}% per day, method: ${iv.trendMethod}) | Regime: ${iv.regime}`;
-          prompt += `\n  → Interpret: ${iv.regime === 'high volatility' ? 'Currently in elevated volatility regime - options pricing reflects higher uncertainty.' : iv.regime === 'low volatility' ? 'Currently in low volatility regime - options pricing reflects lower uncertainty.' : 'Currently in normal volatility regime.'} `;
-          prompt += `${iv.trend === 'increasing' ? 'Volatility expectations are rising.' : iv.trend === 'decreasing' ? 'Volatility expectations are falling.' : 'Volatility expectations are stable.'}`;
+          const trendDesc = iv.trend === 'increasing' ? 'rising' : iv.trend === 'decreasing' ? 'falling' : 'stable';
+          historicalNotes.push(`ATM IV: Currently ${iv.current.toFixed(1)}% (${iv.changeFromAvg > 0 ? '+' : ''}${iv.changeFromAvg} pp vs ${iv.sampleCount}-day avg ${iv.average.toFixed(1)}%, median ${iv.median.toFixed(1)}%). Trend: ${trendDesc} (${iv.trendStrength}% per day, ${iv.trendMethod} method). Regime: ${iv.regime}.`);
         }
         
         if (patterns.correlations.length > 0) {
-          prompt += `\n\nMetric Correlations (historical relationships, ${patterns.correlations[0].matchedSamples} matched samples):`;
-          patterns.correlations.forEach(corr => {
-            prompt += `\n- ${corr.metrics}: ${corr.relationship} correlation (${corr.correlation}, ${corr.strength}, ${corr.provenance} data, ${Math.floor(corr.dataAgeSeconds / 86400)}d old)`;
-            prompt += `\n  → When these metrics move together, it suggests: ${corr.relationship === 'positive' ? 'they tend to increase/decrease together historically' : 'they tend to move in opposite directions historically'}`;
-          });
+          const corrNotes = patterns.correlations.map(corr => 
+            `${corr.metrics}: ${corr.relationship} correlation (${corr.correlation}, ${corr.strength}, ${corr.matchedSamples} matched samples)`
+          ).join('; ');
+          historicalNotes.push(`Historical correlations: ${corrNotes}.`);
         }
         
-        prompt += `\n\nCurrent Data Provenance: ${currentProvenance} (age: ${Math.floor(currentDataAge / 60)} minutes)`;
-        prompt += `\n\nIMPORTANT: Use these factual patterns to inform your analysis. State patterns as facts (e.g., "Gamma has been increasing 2.1% per day over the past week using robust median method"), not predictions. Do not guess future movements - only describe what the data shows. Discount backfilled or stale data appropriately.`;
-      } else if (historicalMetrics && historicalMetrics.length > 0 && historicalMetrics.length < 5) {
-        prompt += `\n\n⚠️ Historical data available but insufficient for pattern analysis (${historicalMetrics.length} samples, need ≥5 for reliable trends/correlations).`;
+        // Add data quality context
+        const dataAge = Math.floor(patterns.metadata.dataAgeSeconds / 86400);
+        const provenanceNote = patterns.metadata.provenance !== 'live' ? ` (${patterns.metadata.provenance} data, ${dataAge}d old)` : ` (${dataAge}d old)`;
+        
+        if (historicalNotes.length > 0) {
+          prompt += `\n\nHISTORICAL CONTEXT (${patterns.metadata.sampleCount} days${provenanceNote}):`;
+          prompt += `\n${historicalNotes.join('\n')}`;
+          prompt += `\n\nUse this historical context to inform your analysis naturally. Reference trends and patterns as facts when relevant (e.g., "IV has been falling X% per day" or "gamma is in the top quartile historically"). Do not create a separate section - integrate insights into your existing analysis format. State what the data shows, not predictions.`;
+        }
       }
     }
 
