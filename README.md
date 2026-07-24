@@ -13,7 +13,9 @@ A Node.js Express API that provides stock analysis using Claude AI, real-time ne
 - 🔍 **Multiple perspectives**: Bullish, Bearish, and Neutral analysis
 - 🛡️ **Investment advice guardrails** - never recommends buy/sell/hold
 - 🧮 **14 Advanced quant metrics**: Dealer Gamma, Skew, ATM IV, Put/Call Ratios, Implied Moves, Max Pain, Gamma Walls, IV Term Structure, Zero Gamma Level, Total Delta/Vega, Vanna, and more
+- 📈 **Historical pattern analysis** - Trend detection, percentile analysis, statistical significance, and correlation analysis when historical data is available
 - 🎯 **Symbol extraction** - automatically detects tickers from queries
+- 💬 **Conversation memory** - Follow-up questions with context (optional Supabase integration)
 - ✅ **Built-in API key testing** endpoints
 - 🚀 **Production-ready** with proper error handling
 - 🌐 **CORS enabled** for iOS app integration
@@ -232,7 +234,127 @@ The `analysis` field now contains:
 3. **Evidence-based reasoning** from cleaned news
 4. **Explicit unavailability notices** when data missing
 
-Example response:
+**Example 1: Basic Stock Analysis**
+
+Request:
+```json
+{
+  "query": "Why did AAPL move today?"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "schema_version": "2.0",
+  "analysis": "Apple shares are trading at $284.74, up 2.3% from yesterday's close. The options market shows dealer gamma of $86.8B (long), with skew at -11.5 percentage points indicating elevated put demand. ATM implied volatility sits at 22.7%, suggesting moderate volatility expectations.\n\nBULLISH: Strong dealer gamma position provides downside support, and the stock is trading above key technical levels.\n\nBEARISH: Elevated put skew suggests institutional hedging activity, which could indicate underlying concerns.\n\nNEUTRAL: Current price action appears balanced between technical support and volatility expectations.",
+  "analysis_v2": {
+    "intro": "Apple shares are trading at $284.74, up 2.3% from yesterday's close. The options market shows dealer gamma of $86.8B (long), with skew at -11.5 percentage points indicating elevated put demand.",
+    "bullish": "Strong dealer gamma position provides downside support, and the stock is trading above key technical levels.",
+    "bearish": "Elevated put skew suggests institutional hedging activity, which could indicate underlying concerns.",
+    "neutral": "Current price action appears balanced between technical support and volatility expectations.",
+    "sources": [
+      {
+        "type": "price",
+        "provider": "Alpaca",
+        "timestamp": "2025-11-22T20:00:00Z",
+        "status": "ok",
+        "freshness_seconds": 13
+      },
+      {
+        "type": "options",
+        "provider": "Polygon.io",
+        "timestamp": "2025-11-22T19:45:00Z",
+        "status": "ok",
+        "freshness_seconds": 900
+      },
+      {
+        "type": "news",
+        "provider": "Finnhub",
+        "timestamp": "2025-11-22T20:00:00Z",
+        "status": "ok",
+        "freshness_seconds": 0
+      }
+    ],
+    "meta": {
+      "ticker": "AAPL",
+      "generated_at": "2025-11-22T20:00:29.779Z",
+      "confidence": {
+        "bullish": 0.4,
+        "bearish": 0.4,
+        "neutral": 0.6
+      },
+      "parse_status": "ok"
+    }
+  },
+  "usage": {
+    "input_tokens": 1098,
+    "output_tokens": 436
+  }
+}
+```
+
+**Example 2: Options-Specific Query**
+
+Request:
+```json
+{
+  "query": "What's the dealer gamma position for SPY?"
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "schema_version": "2.0",
+  "analysis": "SPY's dealer gamma position is currently -$1.7B (short), indicating dealers are net short gamma. This creates a dynamic where large moves can accelerate as dealers hedge by buying or selling shares. The skew is 5.4 percentage points, showing elevated put demand relative to calls.\n\nBULLISH: Short gamma position means any upward momentum could accelerate as dealers buy to hedge.\n\nBEARISH: Short gamma also means downside moves could accelerate, and elevated skew suggests institutional hedging.\n\nNEUTRAL: Current positioning reflects normal market structure with balanced risk on both sides.",
+  "analysis_v2": {
+    "intro": "SPY's dealer gamma position is currently -$1.7B (short), indicating dealers are net short gamma. This creates a dynamic where large moves can accelerate as dealers hedge.",
+    "bullish": "Short gamma position means any upward momentum could accelerate as dealers buy to hedge.",
+    "bearish": "Short gamma also means downside moves could accelerate, and elevated skew suggests institutional hedging.",
+    "neutral": "Current positioning reflects normal market structure with balanced risk on both sides.",
+    "sources": [
+      {
+        "type": "options",
+        "provider": "Polygon.io",
+        "timestamp": "2025-11-22T19:45:00Z",
+        "status": "ok",
+        "freshness_seconds": 900
+      }
+    ],
+    "meta": {
+      "ticker": "SPY",
+      "generated_at": "2025-11-22T20:00:29.779Z",
+      "confidence": {
+        "bullish": 0.3,
+        "bearish": 0.3,
+        "neutral": 0.7
+      },
+      "parse_status": "ok"
+    }
+  },
+  "usage": {
+    "input_tokens": 856,
+    "output_tokens": 312
+  }
+}
+```
+
+**Example 3: With Historical Context (Database Enabled)**
+
+When historical data is available (≥5 samples), responses include enhanced pattern analysis:
+
+```
+"Apple's dealer gamma is $86.8B (long), which is 15% above the 30-day average of $75.2B. 
+The trend shows gamma has been increasing 2.3% per day over the past 2 weeks (robust method), 
+placing AAPL in the top quartile historically (78th percentile, z-score: 1.8 - unusual). 
+Skew at -11.5 pp is elevated compared to the -8.2 pp average, indicating heightened put demand."
+```
+
+**Example 4: Without Options Data**
+
 ```json
 {
   "success": true,
@@ -1265,6 +1387,22 @@ Automatically logs metrics snapshots to Supabase after every successful analysis
 **Automatic Behavior:**
 Every `/analyze` request with valid options data automatically logs to `metrics_history` table. No additional API calls needed.
 
+**Enhanced Pattern Analysis:**
+
+When historical data is available (≥5 samples), the AI automatically includes enhanced pattern analysis in responses:
+
+- **Trend Detection:** Linear regression or robust median/MAD methods identify increasing/decreasing/stable trends
+- **Percentile Analysis:** Shows if current values are in top/bottom quartile vs historical range
+- **Statistical Significance:** Z-scores classify values as normal/unusual/extreme
+- **Regime Detection:** Classifies volatility environments (high/normal/low)
+- **Correlation Analysis:** Identifies relationships between metrics (e.g., gamma vs IV) with ±1 day matching tolerance
+- **Provenance Tracking:** Indicates data source (live/cached/backfilled/mixed) and data age
+
+**Requirements:**
+- Needs ≥5 historical samples per metric for reliable analysis
+- Currently active for: AAPL, MSFT, NVDA, QQQ, SPY, TSLA (6 tickers)
+- Pattern analysis is integrated naturally into responses (no new sections, same structure)
+
 **Query Historical Data:**
 ```bash
 # Get 30 days of metrics for AAPL
@@ -1461,6 +1599,176 @@ Runtime: 30 minutes
 - ~2 minutes per ticker for 20 trading days
 - 12 second delay between requests (Polygon rate limit)
 - For 6 tickers × 20 days = ~24 minutes total runtime
+
+### Database Contents & Current Status
+
+**Metrics History Table:**
+- **Total Records:** 238+ snapshots
+- **Unique Tickers:** 12 (AAPL, AMD, AMZN, GLD, GOOGL, META, MSFT, NVDA, QQQ, SPY, TEST, TSLA)
+- **Date Range:** October 6, 2025 to November 22, 2025 (48+ days)
+- **Data Freshness:**
+  - Fresh data: ~144 records (60%)
+  - Backfilled data: ~94 records (40%)
+
+**Conversations Table:**
+- Ready for use (stores conversation context for follow-up questions)
+
+**Coverage by Ticker:**
+- **6 Core Tickers with Complete Data (≥5 samples for all metrics):**
+  - AAPL, MSFT, NVDA, QQQ, SPY, TSLA
+- **4 Additional Tickers (from daily logger):**
+  - AMD, AMZN, GOOGL, META (need gamma/skew data for full pattern analysis)
+
+### What The Database Adds
+
+The database transforms the API from a real-time analysis tool into an intelligent system that learns from history and provides context-aware insights.
+
+#### 1. **Historical Pattern Analysis** 🎯
+
+The database enables the AI to analyze trends and patterns over time using statistical methods:
+
+**What This Adds:**
+- **Trend Detection:** Identifies if metrics are increasing, decreasing, or stable (using linear regression or robust median/MAD methods)
+- **Percentile Analysis:** Shows if current values are historically high/low (top/bottom quartile detection)
+- **Statistical Significance:** Z-scores indicate if values are extreme (unusual/normal/extreme classification)
+- **Regime Detection:** Classifies volatility environments (high/normal/low volatility regimes)
+- **Correlation Analysis:** Identifies relationships between metrics (e.g., gamma vs IV) with ±1 day matching tolerance
+
+**Requirements:**
+- Needs ≥5 historical samples per metric for reliable analysis
+- Currently available for: AAPL, MSFT, NVDA, QQQ, SPY, TSLA (6 tickers)
+
+**Example Enhanced Response:**
+```
+"Apple's dealer gamma is currently $86.8B (long), which is 15% above the 30-day average of $75.2B. 
+The trend shows gamma has been increasing 2.3% per day over the past 2 weeks (robust method), 
+placing AAPL in the top quartile historically (78th percentile, z-score: 1.8 - unusual). 
+Skew at -11.5 pp is elevated compared to the -8.2 pp average, indicating heightened put demand. 
+ATM IV of 22.7% is in a normal volatility regime, down from the 25.1% average but within 
+1 standard deviation. Historical correlation analysis shows a moderate positive relationship 
+between gamma and IV (0.65, 18 matched samples)."
+```
+
+#### 2. **Conversation Memory** 💬
+
+Enables follow-up questions with context preservation:
+
+**What This Adds:**
+- **Context Preservation:** Remembers the last ticker discussed in a conversation
+- **Natural Conversations:** Users can ask follow-ups without repeating ticker
+- **Session Management:** Auto-expires after 30 minutes
+- **Multi-Turn Analysis:** Enables deeper dives into specific stocks
+
+**Example Flow:**
+```bash
+# First query - establishes context
+POST /analyze
+{
+  "query": "Analyze AAPL",
+  "conversation_id": "user-session-123"
+}
+# Response includes full AAPL analysis
+
+# Follow-up (remembers AAPL context)
+POST /analyze
+{
+  "query": "What about the gamma?",
+  "conversation_id": "user-session-123"
+}
+# Response automatically uses AAPL from conversation history
+```
+
+#### 3. **Historical Metrics API** 📊
+
+Query historical data directly for custom analytics:
+
+**Endpoint:**
+```bash
+GET /history/AAPL?days=30
+```
+
+**Use Cases:**
+- Build custom analytics dashboards
+- Chart metrics over time
+- Track volatility regime changes
+- Analyze options positioning trends
+
+**Example Response:**
+```json
+{
+  "ticker": "AAPL",
+  "days_requested": 30,
+  "snapshots": 25,
+  "data": [
+    {
+      "date": "2025-11-22",
+      "spot_price": 284.74,
+      "dealer_gamma_value": 86.83,
+      "dealer_gamma_direction": "long",
+      "skew_value": -11.51,
+      "atm_iv_value": 22.7,
+      "put_call_volume_ratio": 1.23,
+      "implied_move_pct": 2.7,
+      "max_pain": 285.00,
+      "data_freshness": "fresh",
+      "recorded_at": "2025-11-22T20:00:29.779Z"
+    }
+    // ... 24 more days
+  ]
+}
+```
+
+#### 4. **Automated Daily Logging** 🤖
+
+**How It Works:**
+- Every successful `/analyze` request automatically logs metrics to database
+- GitHub Actions workflow runs daily to log metrics for popular tickers
+- One snapshot per ticker per day (upsert logic prevents duplicates)
+
+**Current Coverage:**
+- 6 tickers with complete historical data (≥5 samples for all metrics)
+- 48+ days of data (Oct 6 - Nov 22, 2025)
+- Mix of fresh (60%) and backfilled (40%) data
+
+### Database Enhancement Summary
+
+#### Without Database
+- ✅ Real-time analysis works perfectly
+- ✅ News, price, and options data available
+- ✅ AI analysis with multiple perspectives
+- ❌ No historical context or trends
+- ❌ No conversation memory
+- ❌ No follow-up question support
+
+#### With Database
+- ✅ **Everything above, PLUS:**
+- ✅ Historical pattern analysis (trends, percentiles, correlations)
+- ✅ Conversation memory for natural follow-ups
+- ✅ Historical metrics API for custom analytics
+- ✅ Automated daily logging for continuous data collection
+- ✅ Enhanced AI responses with statistical context
+
+**The database transforms the API from a real-time analysis tool into an intelligent system that learns from history and provides context-aware insights.**
+
+### Example: Enhanced Response with Database
+
+**Without Database:**
+```
+"Apple's dealer gamma is $86.8B (long), with skew at -11.5 pp and ATM IV at 22.7%."
+```
+
+**With Database (Historical Context):**
+```
+"Apple's dealer gamma is $86.8B (long), which is 15% above the 30-day average of $75.2B. 
+The trend shows gamma has been increasing 2.3% per day over the past 2 weeks (robust method), 
+placing AAPL in the top quartile historically (78th percentile, z-score: 1.8 - unusual). 
+Skew at -11.5 pp is elevated compared to the -8.2 pp average, indicating heightened put demand. 
+ATM IV of 22.7% is in a normal volatility regime, down from the 25.1% average but within 
+1 standard deviation. Historical correlation analysis shows a moderate positive relationship 
+between gamma and IV (0.65, 18 matched samples)."
+```
+
+**The database enables the AI to provide institutional-grade analysis with statistical rigor and historical context.**
 
 ---
 
