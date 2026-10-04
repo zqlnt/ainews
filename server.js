@@ -7,6 +7,7 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 import { fetchOptions, getOptionsProvider } from './lib/optionsProvider.js';
 import { initCacheWarmer } from './lib/cacheWarmer.js';
+import { researchFailure } from './lib/researchContract.js';
 import { validateAnalysisV2, parseFromLegacyText, buildLegacyText } from './lib/analysisValidator.js';
 import { 
   isConversationMemoryEnabled, 
@@ -312,7 +313,8 @@ const fetchAlpacaPrice = async (symbol) => {
         currentPrice,
         prevClose,
         change,
-        changePercent
+        changePercent,
+        timestamp: data.quote.t || null
       };
     }
     
@@ -1502,14 +1504,14 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
     let priceData = null;
     let spotPrice = null;
     if (symbol) {
-      const priceTimestamp = new Date();
       priceData = await fetchAlpacaPrice(symbol);
       spotPrice = priceData?.currentPrice;
       if (priceData) {
         sourcesV2.push({
           type: 'price',
           provider: 'Alpaca',
-          timestamp: priceTimestamp.toISOString(),
+          timestamp: priceData.timestamp,
+          fetched_at: new Date().toISOString(),
           status: 'ok',
           freshness_seconds: 0 // Will be computed during validation
         });
@@ -1525,11 +1527,11 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
       const isStale = optionsData.isStale || false;
       
       if (hasOptionsData) {
-        const optionsTimestamp = new Date(optionsData.fetchedAt);
         sourcesV2.push({
           type: 'options',
-          provider: 'Polygon.io',
-          timestamp: optionsTimestamp.toISOString(),
+          provider: getOptionsProvider(),
+          timestamp: null,
+          fetched_at: optionsData.fetchedAt,
           status: isStale ? 'stale' : 'ok',
           freshness_seconds: 0 // Will be computed during validation
         });
@@ -1537,8 +1539,9 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
         // Options attempted but unavailable
         sourcesV2.push({
           type: 'options',
-          provider: 'Polygon.io',
-          timestamp: new Date().toISOString(),
+          provider: getOptionsProvider(),
+          timestamp: null,
+          fetched_at: new Date().toISOString(),
           status: 'unavailable',
           freshness_seconds: 0
         });
@@ -1555,9 +1558,10 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
     if (newsText && newsText.trim().length > 0) {
       sourcesV2.push({
         type: 'news',
-        provider: 'Finnhub',
-        timestamp: new Date().toISOString(),
-        status: 'ok',
+        provider: 'Client-provided news',
+        timestamp: null,
+        fetched_at: new Date().toISOString(),
+        status: 'unknown',
         freshness_seconds: 0
       });
     }
@@ -1571,8 +1575,11 @@ Provide a clear, accurate explanation in 2-4 paragraphs. Use plain language but 
     const hasOptionsData = optionsData.rows && optionsData.rows.length > 0;
     
     if (hasOptionsData && spotPrice) {
-      gamma = calculateDealerGammaFromRows(optionsData.rows, spotPrice);
-      skew = calculateSkewFromRows(optionsData.rows, spotPrice);
+      // Provider completeness and missing-value checks must also constrain downstream calculators.
+      if (optionsData.quality?.usableForAggregates === true) {
+        gamma = calculateDealerGammaFromRows(optionsData.rows, spotPrice);
+        skew = calculateSkewFromRows(optionsData.rows, spotPrice);
+      }
       atmIV = optionsData.atmIV;
       putCallRatio = optionsData.putCallVolumeRatio;
       impliedMove = optionsData.impliedMove;
@@ -1899,28 +1906,7 @@ Now provide your analysis:`;
       } catch (fallbackError) {
         log(`❌ /analyze - All Claude attempts failed: ${fallbackError.message}`);
         
-        // Return generic fallback
-        const fallbackText = "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.";
-        
-        return res.json({
-          success: true,
-          schema_version: "2.0",
-          analysis: fallbackText,
-          analysis_v2: validateAnalysisV2({
-            intro: fallbackText,
-            bullish: "Market conditions may present opportunities.",
-            bearish: "Caution is warranted in current conditions.",
-            neutral: "Consider waiting for more clarity before taking action."
-          }, {
-            ticker: symbol,
-            sources: sourcesV2,
-            parseStatus: 'fallback_legacy'
-          }),
-          usage: {
-            input_tokens: 0,
-            output_tokens: 0
-          }
-        });
+        return res.status(503).json(researchFailure('RESEARCH_UNAVAILABLE'));
       }
     }
 
@@ -1965,6 +1951,10 @@ Now provide your analysis:`;
       sources: sourcesV2,
       parseStatus
     });
+
+    if (![analysisV2.intro, analysisV2.bullish, analysisV2.bearish, analysisV2.neutral].some(Boolean)) {
+      return res.status(502).json(researchFailure('EMPTY_ANALYSIS'));
+    }
 
     // Build legacy analysis text
     const legacyAnalysis = buildLegacyText(analysisV2);
@@ -2036,30 +2026,8 @@ Now provide your analysis:`;
     });
 
   } catch (error) {
-    // Task 7: Final catch-all - return fallback instead of 500 error
     log(`❌ /analyze - Unexpected error: ${error.message}`);
-    
-    const fallbackText = "Several markets have seen movement today. Ask me about a stock to begin, then select a sentiment below to guide the discussion.\n\nBULLISH: Market conditions may present opportunities.\n\nBEARISH: Caution is warranted in current conditions.\n\nNEUTRAL: Consider waiting for more clarity before taking action.";
-    
-    res.json({
-      success: true,
-      schema_version: "2.0",
-      analysis: fallbackText,
-      analysis_v2: validateAnalysisV2({
-        intro: fallbackText,
-        bullish: "Market conditions may present opportunities.",
-        bearish: "Caution is warranted in current conditions.",
-        neutral: "Consider waiting for more clarity before taking action."
-      }, {
-        ticker: null,
-        sources: [],
-        parseStatus: 'fallback_legacy'
-      }),
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0
-      }
-    });
+    res.status(500).json(researchFailure('RESEARCH_FAILED'));
   }
 });
 
@@ -2491,4 +2459,3 @@ app.listen(PORT, async () => {
   
   log('');
 });
-

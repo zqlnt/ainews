@@ -7,10 +7,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/analysisValidator.test.js",
+    "test": "node test/analysisValidator.test.js && node --test test/researchContract.test.js",
     "test:news": "node test/newsHelpers.test.js",
     "test:sentiment": "node test/sentiment.test.js",
-    "test:all": "npm test && npm run test:news && npm run test:sentiment"
+    "test:options": "node --test test/polygonProvider.test.js",
+    "test:all": "npm test && npm run test:news && npm run test:sentiment && npm run test:options"
   },
   "keywords": [
     "stock",

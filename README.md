@@ -1788,3 +1788,16 @@ For issues or questions:
 
 **Ready for production!** 🚀
 
+
+### Research reliability contract
+
+`/analyze` returns `success:false`, no analysis text, and a structured error on
+provider exhaustion (503), empty model output (502), or unexpected failure (500).
+Clients must not treat a transport success alone as a completed analysis.
+Missing or invalid model confidence remains null; valid scores are explicitly
+uncalibrated model scores. Missing source observation timestamps and ages remain
+null. `fetched_at` records retrieval and is not a substitute for observation time.
+News supplied as text by a client has unknown source observation time. Options
+provider identity follows configuration; the bridge fetch time does not establish
+when each underlying contract last traded. This contract does not calibrate
+forecasts or establish trading performance.
