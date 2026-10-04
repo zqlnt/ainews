@@ -75,10 +75,10 @@ test('Test 2: Some sections null should be handled gracefully', () => {
   assert.equal(result.bearish, 'Bearish only.');
   assert.equal(result.neutral, null);
   
-  // Confidence should be computed as fallback: null → 0.0, present → 0.6
-  assert.equal(result.meta.confidence.bullish, 0.0);
-  assert.equal(result.meta.confidence.bearish, 0.6);
-  assert.equal(result.meta.confidence.neutral, 0.0);
+  // Confidence should be unknown when not supplied
+  assert.equal(result.meta.confidence.bullish, null);
+  assert.equal(result.meta.confidence.bearish, null);
+  assert.equal(result.meta.confidence.neutral, null);
 });
 
 // ==================== Test 3: Malformed JSON Coerced to Nulls ====================
@@ -100,10 +100,10 @@ test('Test 3: Malformed/missing fields coerced to null', () => {
   assert.equal(result.bearish, null);
   assert.equal(result.neutral, null);
   
-  // All confidence should be 0.0 (all sections null)
-  assert.equal(result.meta.confidence.bullish, 0.0);
-  assert.equal(result.meta.confidence.bearish, 0.0);
-  assert.equal(result.meta.confidence.neutral, 0.0);
+  // Confidence is unknown for absent sections
+  assert.equal(result.meta.confidence.bullish, null);
+  assert.equal(result.meta.confidence.bearish, null);
+  assert.equal(result.meta.confidence.neutral, null);
   assert.equal(result.meta.parse_status, 'coerced');
 });
 
@@ -130,7 +130,7 @@ test('Test 4: Sources array validated correctly', () => {
 });
 
 // ==================== Test 5: Confidence Clamped to [0, 1] ====================
-test('Test 5: Confidence values clamped to [0, 1]', () => {
+test('Test 5: Invalid confidence remains unknown', () => {
   const raw = {
     intro: "Test",
     bullish: "Bull",
@@ -145,8 +145,8 @@ test('Test 5: Confidence values clamped to [0, 1]', () => {
 
   const result = validateAnalysisV2(raw, { ticker: 'AAPL', sources: [], parseStatus: 'ok' });
 
-  assert.equal(result.meta.confidence.bullish, 1.0);  // Clamped to 1.0
-  assert.equal(result.meta.confidence.bearish, 0.0);  // Clamped to 0.0
+  assert.equal(result.meta.confidence.bullish, null);  // Clamped to 1.0
+  assert.equal(result.meta.confidence.bearish, null);  // Clamped to 0.0
   assert.equal(result.meta.confidence.neutral, 0.45); // Unchanged
 });
 
@@ -239,8 +239,9 @@ test('Test 9: Build legacy text from analysis_v2', () => {
   assert.ok(legacyText.includes('BULLISH: Bullish view.'));
   assert.ok(legacyText.includes('BEARISH: Bearish view.'));
   assert.ok(legacyText.includes('NEUTRAL: Neutral view.'));
-  assert.ok(legacyText.includes('Data sources:'));
-  assert.ok(legacyText.includes('Alpaca'));
+  // Source provenance is carried in analysis_v2.sources, not added to prose.
+  assert.ok(!legacyText.includes('Data sources:'));
+  assert.ok(!legacyText.includes('Alpaca'));
 });
 
 // ==================== Test 10: Whitespace Collapsing ====================
@@ -297,7 +298,7 @@ test('Test 12: Text length capped at max', () => {
 });
 
 // ==================== Test 13: Missing Confidence Uses Fallback ====================
-test('Test 13: Missing confidence object uses section-based fallback', () => {
+test('Test 13: Missing confidence remains unknown', () => {
   const raw = {
     intro: "Intro",
     bullish: "Bull",
@@ -308,10 +309,10 @@ test('Test 13: Missing confidence object uses section-based fallback', () => {
 
   const result = validateAnalysisV2(raw, { ticker: 'AAPL', sources: [], parseStatus: 'ok' });
 
-  // Fallback: present sections → 0.6, null sections → 0.0
-  assert.equal(result.meta.confidence.bullish, 0.6);
-  assert.equal(result.meta.confidence.bearish, 0.0);
-  assert.equal(result.meta.confidence.neutral, 0.6);
+  // No default confidence is invented
+  assert.equal(result.meta.confidence.bullish, null);
+  assert.equal(result.meta.confidence.bearish, null);
+  assert.equal(result.meta.confidence.neutral, null);
 });
 
 // ==================== Test 14: Generated Timestamp Present ====================
