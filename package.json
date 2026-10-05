@@ -11,7 +11,8 @@
     "test:news": "node test/newsHelpers.test.js",
     "test:sentiment": "node test/sentiment.test.js",
     "test:options": "node --test test/polygonProvider.test.js",
-    "test:all": "npm test && npm run test:news && npm run test:sentiment && npm run test:options"
+    "test:forward-job": "node --test test/traidForwardJob.test.js",
+    "test:all": "npm test && npm run test:news && npm run test:sentiment && npm run test:options && npm run test:forward-job"
   },
   "keywords": [
     "stock",
